@@ -263,6 +263,22 @@ class _HomePageState extends State<HomePage> {
     return a;
   }
 
+  /// Admin action: persist an edited account (e.g. adjusting a self-registered
+  /// person's role / work center).
+  void _updateAccount(Account a) {
+    _accounts[a.id] = a;
+    final json = jsonEncode(a.toJson());
+    _node!.putRaw(_kAccounts, a.id, json);
+    _bleBroadcast(_kAccounts, a.id, json);
+    // If we edited our own account, mirror the change into the live identity.
+    if (_account?.id == a.id) {
+      _role = a.role;
+      _workcenter = a.workcenterId;
+      _name = a.name;
+    }
+    if (mounted) setState(() {});
+  }
+
   /// Sign out of the account but stay in the mesh (node + key live on).
   Future<void> _signOut() async {
     final p = await SharedPreferences.getInstance();
@@ -1021,6 +1037,7 @@ class _HomePageState extends State<HomePage> {
                       ..sort((a, b) => a.name.compareTo(b.name)),
                     org: _org,
                     onCreate: _createAccount,
+                    onUpdate: _updateAccount,
                   ),
                 )),
                 icon: const Icon(Icons.manage_accounts),
@@ -1565,26 +1582,21 @@ class _StartScreen extends StatelessWidget {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: onHost,
-                      icon: const Icon(Icons.add_circle_outline),
-                      label: const Text('Create a new unit mesh'),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
                       onPressed: onJoin,
                       icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('Join a mesh (scan QR)'),
+                      label: const Text('Scan join QR'),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 8),
                   const Text(
-                    "Creating a mesh makes you its admin — you set up the org "
-                    "chart and accounts. Joining requires scanning the admin's QR.",
+                    "Scan your admin's QR to join the unit mesh.",
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                  const SizedBox(height: 28),
+                  TextButton(
+                    onPressed: onHost,
+                    child: const Text('Set up a new mesh instead'),
                   ),
                 ]),
               ),
@@ -1659,35 +1671,72 @@ class _SignInScreen extends StatelessWidget {
         ),
       );
     }
+    // Hybrid: pick an admin-created account (+ PIN), or self-register.
     return Scaffold(
       appBar: AppBar(
           title: const Text('Sign in'), actions: [themeToggleButton(context)]),
-      body: accounts.isEmpty
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: Text(
-                  'No accounts yet.\n\nAsk your admin (DIVO / 3-M Coordinator) '
-                  'to create your account — it appears here once it syncs.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey),
-                ),
+      body: ListView(
+        children: [
+          if (accounts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 24, 24, 8),
+              child: Text(
+                "You're in the mesh. Pick your profile if your admin already "
+                'added you, or register yourself below.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey),
               ),
-            )
-          : ListView(
-              children: [
-                for (final a in accounts)
-                  ListTile(
-                    leading: _Badge(a.role.tag),
-                    title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
-                    subtitle:
-                        Text('${a.role.title} · ${org.pathOf(a.workcenterId)}'),
-                    trailing: const Icon(Icons.lock_outline),
-                    onTap: () => _enterPin(context, a),
-                  ),
-              ],
             ),
+          for (final a in accounts)
+            ListTile(
+              leading: _Badge(a.role.tag),
+              title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
+              subtitle: Text('${a.role.title} · ${org.pathOf(a.workcenterId)}'),
+              trailing: const Icon(Icons.lock_outline),
+              onTap: () => _enterPin(context, a),
+            ),
+          const Divider(height: 32),
+          ListTile(
+            leading: const Icon(Icons.person_add_alt_1),
+            title: const Text('Register myself'),
+            subtitle: const Text(
+                'Create your own profile — your admin can adjust it later'),
+            onTap: () => _selfRegister(context),
+          ),
+        ],
+      ),
     );
+  }
+
+  void _selfRegister(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (ctx) => Scaffold(
+        appBar: AppBar(title: const Text('Register yourself')),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: _AccountForm(
+                org: org,
+                roles: Role.values,
+                submitLabel: 'Register & sign in',
+                onSubmit: (name, rate, role, wc, pin) {
+                  final a = onCreate(
+                      name: name,
+                      rate: rate,
+                      role: role,
+                      workcenterId: wc,
+                      pin: pin);
+                  Navigator.pop(ctx);
+                  onSignIn(a);
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
   }
 
   Future<void> _enterPin(BuildContext context, Account a) async {
@@ -1732,7 +1781,10 @@ class _SignInScreen extends StatelessWidget {
 /// Admin-only: list personnel and add accounts (assigned to org work centers).
 class _AdminScreen extends StatefulWidget {
   const _AdminScreen(
-      {required this.accounts, required this.org, required this.onCreate});
+      {required this.accounts,
+      required this.org,
+      required this.onCreate,
+      required this.onUpdate});
   final List<Account> accounts;
   final OrgChart org;
   final Account Function({
@@ -1742,6 +1794,7 @@ class _AdminScreen extends StatefulWidget {
     required String workcenterId,
     required String pin,
   }) onCreate;
+  final void Function(Account) onUpdate;
   @override
   State<_AdminScreen> createState() => _AdminScreenState();
 }
@@ -1794,6 +1847,63 @@ class _AdminScreenState extends State<_AdminScreen> {
     );
   }
 
+  void _edit(Account a) {
+    Role role = a.role;
+    String? wc = a.workcenterId;
+    final wcs = widget.org.workcenters.values.toList()
+      ..sort((x, y) => x.id.compareTo(y.id));
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => Padding(
+          padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Edit ${a.name}', style: Theme.of(ctx).textTheme.titleLarge),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<Role>(
+                initialValue: role,
+                decoration: const InputDecoration(labelText: 'Role'),
+                items: Role.values
+                    .map((r) => DropdownMenuItem(value: r, child: Text(r.title)))
+                    .toList(),
+                onChanged: (r) => setS(() => role = r ?? role),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: wcs.any((w) => w.id == wc) ? wc : null,
+                decoration: const InputDecoration(labelText: 'Work center'),
+                items: wcs
+                    .map((w) => DropdownMenuItem(
+                        value: w.id, child: Text('${w.id} · ${w.name}')))
+                    .toList(),
+                onChanged: (v) => setS(() => wc = v),
+              ),
+              const SizedBox(height: 20),
+              FilledButton(
+                onPressed: () {
+                  a.role = role;
+                  if (wc != null) a.workcenterId = wc!;
+                  widget.onUpdate(a);
+                  setState(() {});
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1814,6 +1924,8 @@ class _AdminScreenState extends State<_AdminScreen> {
                     title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
                     subtitle: Text(
                         '${a.role.title} · ${widget.org.pathOf(a.workcenterId)} · sees ${scopeLabel(a.role)}'),
+                    trailing: const Icon(Icons.edit_outlined),
+                    onTap: () => _edit(a),
                   ),
               ],
             ),
@@ -1846,6 +1958,7 @@ class _AccountFormState extends State<_AccountForm> {
   final _rate = TextEditingController();
   final _pin = TextEditingController();
   final _pin2 = TextEditingController();
+  final _wcText = TextEditingController(); // fallback if the org hasn't synced
   late Role _role;
   String? _wc;
   String? _err;
@@ -1864,22 +1977,23 @@ class _AccountFormState extends State<_AccountForm> {
     _rate.dispose();
     _pin.dispose();
     _pin2.dispose();
+    _wcText.dispose();
     super.dispose();
   }
 
   void _submit() {
     final n = _name.text.trim();
+    final wc =
+        widget.org.workcenters.isEmpty ? _wcText.text.trim() : (_wc ?? '');
     if (n.isEmpty) return setState(() => _err = 'Name is required');
-    if (_wc == null) {
-      return setState(() => _err = 'No work center — seed the org chart first');
-    }
+    if (wc.isEmpty) return setState(() => _err = 'Work center is required');
     if (_pin.text.length < 4) {
       return setState(() => _err = 'PIN must be at least 4 digits');
     }
     if (_pin.text != _pin2.text) {
       return setState(() => _err = 'PINs do not match');
     }
-    widget.onSubmit(n, _rate.text.trim(), _role, _wc!, _pin.text);
+    widget.onSubmit(n, _rate.text.trim(), _role, wc, _pin.text);
   }
 
   @override
@@ -1908,15 +2022,23 @@ class _AccountFormState extends State<_AccountForm> {
           onChanged: (r) => setState(() => _role = r ?? _role),
         ),
         const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          initialValue: _wc,
-          decoration: const InputDecoration(labelText: 'Work center'),
-          items: wcs
-              .map((w) => DropdownMenuItem(
-                  value: w.id, child: Text('${w.id} · ${w.name}')))
-              .toList(),
-          onChanged: (v) => setState(() => _wc = v),
-        ),
+        if (wcs.isEmpty)
+          TextField(
+            controller: _wcText,
+            decoration: const InputDecoration(
+                labelText: 'Work center (e.g. CP01)',
+                helperText: 'Org chart not synced yet — type your work center'),
+          )
+        else
+          DropdownButtonFormField<String>(
+            initialValue: _wc,
+            decoration: const InputDecoration(labelText: 'Work center'),
+            items: wcs
+                .map((w) => DropdownMenuItem(
+                    value: w.id, child: Text('${w.id} · ${w.name}')))
+                .toList(),
+            onChanged: (v) => setState(() => _wc = v),
+          ),
         const SizedBox(height: 12),
         Row(children: [
           Expanded(
