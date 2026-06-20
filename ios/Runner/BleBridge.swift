@@ -353,7 +353,10 @@ final class PeatBleBridge: NSObject, FlutterStreamHandler {
         let hdr = 3 + collLen
         guard b.count >= hdr + 6,
               let coll = String(bytes: b[3..<hdr], encoding: .utf8) else { return }
-        if coll == "nodes" { return }
+        // Only a job change is worth a background alert. Presence beats churn
+        // every few seconds and the audit log is not user-facing, so skip
+        // everything except "jobs".
+        if coll != "jobs" { return }
         let msgId = (UInt32(b[hdr]) << 24) | (UInt32(b[hdr + 1]) << 16)
                   | (UInt32(b[hdr + 2]) << 8) | UInt32(b[hdr + 3])
         if recentMsgIds.contains(msgId) { return } // re-broadcast or sibling fragment
@@ -367,8 +370,8 @@ final class PeatBleBridge: NSObject, FlutterStreamHandler {
         else { return }
         lastBgNotify = now
         let content = UNMutableNotificationContent()
-        content.title = "Mesh update"
-        content.body = "New \(friendlyCollection(coll)) update from a nearby node."
+        content.title = "Maintenance update"
+        content.body = "A job changed on a nearby node."
         content.sound = .default
         let req = UNNotificationRequest(
             identifier: UUID().uuidString, content: content, trigger: nil)
