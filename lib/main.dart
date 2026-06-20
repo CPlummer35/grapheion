@@ -14,6 +14,7 @@ import 'dart:io' show NetworkInterface, InternetAddressType, Platform;
 import 'dart:math' show Random;
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -258,6 +259,27 @@ class _HomePageState extends State<HomePage> {
 
   // --- BLE bridge (CRDT-over-BLE; parallel to the Iroh path) ----------------
 
+  static const _kBleMacLen = 16; // truncated HMAC-SHA256 appended to each frame
+
+  /// HMAC-SHA256(formationKey, body), truncated — authenticates BLE frame
+  /// membership. Only nodes holding the same formation key produce/verify it.
+  Uint8List _bleMac(List<int> body) {
+    final key = _formationKey;
+    if (key == null) return Uint8List(0);
+    final h = Hmac(sha256, base64Decode(key)).convert(body);
+    return Uint8List.fromList(h.bytes.sublist(0, _kBleMacLen));
+  }
+
+  /// Constant-time tag comparison.
+  bool _macOk(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    var r = 0;
+    for (var i = 0; i < a.length; i++) {
+      r |= a[i] ^ b[i];
+    }
+    return r == 0;
+  }
+
   void _startBle() {
     final node = _node;
     if (node == null || _bleRunning) return;
@@ -276,9 +298,15 @@ class _HomePageState extends State<HomePage> {
 
   /// Broadcast one document as a (possibly fragmented) 0xAF CRDT frame.
   void _bleBroadcast(String coll, String docId, String docJson) {
-    if (!_bleRunning) return;
+    if (!_bleRunning || _formationKey == null) return;
     final collBytes = utf8.encode(coll);
-    final payload = utf8.encode(jsonEncode({'i': docId, 'd': docJson}));
+    final body = utf8.encode(jsonEncode({'i': docId, 'd': docJson}));
+    // Authenticate the frame with the formation key (BLE membership gate):
+    // payload = body + HMAC. Receivers without this key can't verify it -> drop.
+    final mac = _bleMac(body);
+    final payload = Uint8List(body.length + mac.length);
+    payload.setRange(0, body.length, body);
+    payload.setRange(body.length, payload.length, mac);
     int msgId = 0x811c9dc5; // FNV-1a — content-addressed so re-sends dedup
     for (final b in payload) {
       msgId = ((msgId ^ b) * 0x01000193) & 0xFFFFFFFF;
@@ -321,8 +349,13 @@ class _HomePageState extends State<HomePage> {
     final payload = _reassemble(coll, msgId, frame[4], frame[5],
         Uint8List.sublistView(frame, _kBleHdr));
     if (payload == null) return; // incomplete — await more fragments
+    // Membership gate: accept only frames MAC'd with OUR formation key.
+    if (_formationKey == null || payload.length < _kBleMacLen) return;
+    final body = Uint8List.sublistView(payload, 0, payload.length - _kBleMacLen);
+    final mac = Uint8List.sublistView(payload, payload.length - _kBleMacLen);
+    if (!_macOk(mac, _bleMac(body))) return; // wrong key / tampered -> drop
     try {
-      final m = jsonDecode(utf8.decode(payload)) as Map<String, dynamic>;
+      final m = jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
       final id = m['i'] as String;
       final docRaw = m['d'] as String;
       _applyDoc(coll, id, docRaw, remote: true, peer: null);
