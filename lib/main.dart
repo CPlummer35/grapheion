@@ -16,6 +16,8 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:pointycastle/export.dart'
+    show GCMBlockCipher, AESEngine, AEADParameters, KeyParameter;
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
@@ -259,25 +261,42 @@ class _HomePageState extends State<HomePage> {
 
   // --- BLE bridge (CRDT-over-BLE; parallel to the Iroh path) ----------------
 
-  static const _kBleMacLen = 16; // truncated HMAC-SHA256 appended to each frame
+  static const _kBleNonce = 12; // AES-GCM nonce length
+  static const _kBleTag = 16; // AES-GCM auth tag length
 
-  /// HMAC-SHA256(formationKey, body), truncated — authenticates BLE frame
-  /// membership. Only nodes holding the same formation key produce/verify it.
-  Uint8List _bleMac(List<int> body) {
-    final key = _formationKey;
-    if (key == null) return Uint8List(0);
-    final h = Hmac(sha256, base64Decode(key)).convert(body);
-    return Uint8List.fromList(h.bytes.sublist(0, _kBleMacLen));
+  /// Seal a BLE frame body with AES-256-GCM under the formation key →
+  /// nonce(12) + ciphertext + tag. The nonce is SHA-256(body)[:12] — content-
+  /// derived, so a re-broadcast of an unchanged doc is byte-identical (dedup /
+  /// reassembly safe) and distinct docs never share a nonce. Gives both
+  /// confidentiality and membership auth (a wrong key fails the GCM tag).
+  Uint8List? _bleSeal(Uint8List key, Uint8List body) {
+    try {
+      final nonce =
+          Uint8List.fromList(sha256.convert(body).bytes.sublist(0, _kBleNonce));
+      final c = GCMBlockCipher(AESEngine())
+        ..init(true, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
+      final ct = c.process(body);
+      final out = Uint8List(_kBleNonce + ct.length);
+      out.setRange(0, _kBleNonce, nonce);
+      out.setRange(_kBleNonce, out.length, ct);
+      return out;
+    } catch (_) {
+      return null;
+    }
   }
 
-  /// Constant-time tag comparison.
-  bool _macOk(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    var r = 0;
-    for (var i = 0; i < a.length; i++) {
-      r |= a[i] ^ b[i];
+  /// Open a sealed frame; null if the key is wrong or the frame was tampered.
+  Uint8List? _bleOpen(Uint8List key, Uint8List wire) {
+    if (wire.length < _kBleNonce + _kBleTag) return null;
+    try {
+      final nonce = Uint8List.sublistView(wire, 0, _kBleNonce);
+      final ct = Uint8List.sublistView(wire, _kBleNonce);
+      final c = GCMBlockCipher(AESEngine())
+        ..init(false, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
+      return c.process(ct);
+    } catch (_) {
+      return null; // GCM auth failure: wrong key or tampered
     }
-    return r == 0;
   }
 
   void _startBle() {
@@ -298,17 +317,17 @@ class _HomePageState extends State<HomePage> {
 
   /// Broadcast one document as a (possibly fragmented) 0xAF CRDT frame.
   void _bleBroadcast(String coll, String docId, String docJson) {
-    if (!_bleRunning || _formationKey == null) return;
+    final key = _formationKey;
+    if (!_bleRunning || key == null) return;
     final collBytes = utf8.encode(coll);
-    final body = utf8.encode(jsonEncode({'i': docId, 'd': docJson}));
-    // Authenticate the frame with the formation key (BLE membership gate):
-    // payload = body + HMAC. Receivers without this key can't verify it -> drop.
-    final mac = _bleMac(body);
-    final payload = Uint8List(body.length + mac.length);
-    payload.setRange(0, body.length, body);
-    payload.setRange(body.length, payload.length, mac);
-    int msgId = 0x811c9dc5; // FNV-1a — content-addressed so re-sends dedup
-    for (final b in payload) {
+    final body =
+        Uint8List.fromList(utf8.encode(jsonEncode({'i': docId, 'd': docJson})));
+    // Encrypt + authenticate the frame with the formation key (AES-256-GCM):
+    // only same-mesh nodes can decrypt, and it's confidential on the air.
+    final payload = _bleSeal(base64Decode(key), body);
+    if (payload == null) return;
+    int msgId = 0x811c9dc5; // FNV over PLAINTEXT — stable across re-encryptions
+    for (final b in body) {
       msgId = ((msgId ^ b) * 0x01000193) & 0xFFFFFFFF;
     }
     final fragCount =
@@ -346,14 +365,14 @@ class _HomePageState extends State<HomePage> {
     final frame = Uint8List.sublistView(event, 3 + collLen);
     final msgId =
         (frame[0] << 24) | (frame[1] << 16) | (frame[2] << 8) | frame[3];
-    final payload = _reassemble(coll, msgId, frame[4], frame[5],
+    final wire = _reassemble(coll, msgId, frame[4], frame[5],
         Uint8List.sublistView(frame, _kBleHdr));
-    if (payload == null) return; // incomplete — await more fragments
-    // Membership gate: accept only frames MAC'd with OUR formation key.
-    if (_formationKey == null || payload.length < _kBleMacLen) return;
-    final body = Uint8List.sublistView(payload, 0, payload.length - _kBleMacLen);
-    final mac = Uint8List.sublistView(payload, payload.length - _kBleMacLen);
-    if (!_macOk(mac, _bleMac(body))) return; // wrong key / tampered -> drop
+    if (wire == null) return; // incomplete — await more fragments
+    // Decrypt under OUR formation key; a wrong key / tamper fails the GCM tag.
+    final key = _formationKey;
+    if (key == null) return;
+    final body = _bleOpen(base64Decode(key), wire);
+    if (body == null) return; // not our mesh, or tampered -> drop
     try {
       final m = jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
       final id = m['i'] as String;

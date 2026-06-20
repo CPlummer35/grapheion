@@ -23,6 +23,7 @@ dependencies:
   connectivity_plus: ^7.1.1
   flutter_local_notifications: ^22.0.1
   crypto: ^3.0.7
+  pointycastle: ^4.0.0
 
   # Mobile BLE: uncomment when targeting Android/iOS with Dart-owned radio.
   # Requires BLE runtime permissions (declared in android/app/src/main/AndroidManifest.xml
