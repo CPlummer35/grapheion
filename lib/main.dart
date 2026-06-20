@@ -1,10 +1,12 @@
 // Grapheion — mesh-synced corrective-maintenance approval chain (POC).
 //
-// Each device logs in as one role in the chain of command. A maintenance
-// technician originates a job; it then climbs the chain (WCS -> LPO -> DIVO ->
-// 3MC -> CHENG) and finally crosses off-ship to the Port Engineer over the mesh
-// relay. Jobs and their audit log sync as peat documents; the next approver is
-// notified on each hand-off.
+// Each device logs in as one role. A technician originates a job; it climbs the
+// on-ship approval ladder (WCS -> LPO -> DIVO), is worked by the work center,
+// then climbs the close-out ladder (WCS -> LPO -> DIVO) before it's CLOSED. The
+// off-ship Port Engineer is connected only when the DIVO raises a Technical
+// Assistance (TA) request. Jobs + their audit log sync as peat documents; the
+// next approver gets a "your turn" alert and the originator hears approve /
+// return / close updates.
 
 import 'dart:async';
 import 'dart:convert';
@@ -65,7 +67,7 @@ class _HomePageState extends State<HomePage> {
   PeatFlutterNode? _node;
   String _name = '';
   Role? _role;
-  String _workcenter = 'MP01';
+  String _workcenter = 'CP01';
   String? _error;
 
   final Map<String, Job> _jobs = {};
@@ -105,7 +107,7 @@ class _HomePageState extends State<HomePage> {
     if (role != null && name != null && name.isNotEmpty) {
       _name = name;
       _role = roleFromToken(role);
-      _workcenter = wc ?? 'MP01';
+      _workcenter = wc ?? 'CP01';
       // The DIVO hosts a mesh: mint a key if we don't have one yet.
       if (_role == Role.divo && _formationKey == null) {
         _formationKey = _genKey();
@@ -403,18 +405,10 @@ class _HomePageState extends State<HomePage> {
       if (raw == null) return;
       try {
         final job = Job.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        final wasMine = _jobs[job.id]?.approver == _role;
+        final old = _jobs[job.id];
         _jobs[job.id] = job;
-        // A remote action just handed this job to MY stage → alert.
-        if (change.origin.isRemote &&
-            job.approver == _role &&
-            job.status != JobStatus.accepted &&
-            !wasMine) {
-          PeatNotifications.instance.showRemoteChange(
-            collection: job.title.isEmpty ? 'a job' : job.title,
-            preview: 'awaiting your ${_role!.tag} action',
-            peerId: change.origin.peerId,
-          );
+        if (change.origin.isRemote) {
+          _notifyForChange(old, job, change.origin.peerId);
         }
         if (mounted) setState(() {});
       } catch (_) {}
@@ -483,18 +477,123 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
+  int get _now => DateTime.now().millisecondsSinceEpoch;
+
   void _approve(Job job) {
-    job.approve(DateTime.now().millisecondsSinceEpoch);
+    final wasCloseout = job.phase == JobPhase.closeout;
+    job.approve(_now);
     _saveJob(job);
-    _appendEvent(job, job.status == JobStatus.accepted ? 'accept' : 'approve', '');
+    final verb = !wasCloseout
+        ? 'approve'
+        : (job.phase == JobPhase.closed ? 'close' : 'close_confirm');
+    _appendEvent(job, verb, '');
     setState(() {});
   }
 
   void _returnDown(Job job, String comment) {
-    job.returnDown(DateTime.now().millisecondsSinceEpoch);
+    job.returnDown(_now);
     _saveJob(job);
     _appendEvent(job, 'return', comment);
     setState(() {});
+  }
+
+  void _requestTa(Job job) {
+    job.requestTa(_now);
+    _saveJob(job);
+    _appendEvent(job, 'ta_request', '');
+    setState(() {});
+  }
+
+  void _engageTa(Job job) {
+    job.engageTa(_now);
+    _saveJob(job);
+    _appendEvent(job, 'ta_engage', '');
+    setState(() {});
+  }
+
+  void _declineTa(Job job, String comment) {
+    job.declineTa(_now);
+    _saveJob(job);
+    _appendEvent(job, 'ta_decline', comment);
+    setState(() {});
+  }
+
+  void _startWork(Job job) {
+    job.startWork(_now);
+    _saveJob(job);
+    _appendEvent(job, 'start_work', '');
+    setState(() {});
+  }
+
+  void _markComplete(Job job) {
+    job.markComplete(_now);
+    _saveJob(job);
+    _appendEvent(job, 'complete', '');
+    setState(() {});
+  }
+
+  void _rejectCloseout(Job job, String comment) {
+    job.rejectCloseout(_now);
+    _saveJob(job);
+    _appendEvent(job, 'close_reject', comment);
+    setState(() {});
+  }
+
+  /// Whether this job is currently waiting on MY action (for the Inbox).
+  bool _needsMyAction(Job j) {
+    switch (j.phase) {
+      case JobPhase.approval:
+      case JobPhase.closeout:
+        return j.approver == _role;
+      case JobPhase.ta:
+        return _role == Role.portEngineer;
+      case JobPhase.execution:
+        return _role == Role.technician;
+      case JobPhase.closed:
+        return false;
+    }
+  }
+
+  // --- Notifications --------------------------------------------------------
+
+  void _notify(String title, String preview, String? peer) =>
+      PeatNotifications.instance
+          .showRemoteChange(collection: title, preview: preview, peerId: peer);
+
+  /// The next approver gets a "your turn" ping; the originator hears that their
+  /// job advanced, was returned, or was closed.
+  void _notifyForChange(Job? old, Job job, String? peer) {
+    final title = job.title.isEmpty ? 'a job' : job.title;
+    final mineNow = _needsMyAction(job);
+    final mineBefore = old != null && _needsMyAction(old);
+    if (mineNow && !mineBefore) {
+      _notify(title, 'awaiting your ${_role!.tag} action', peer);
+      return;
+    }
+    if (old != null && job.originator == _name) {
+      if (job.returned && !old.returned) {
+        _notify(title, 'returned for rework', peer);
+      } else if (job.phase == JobPhase.closed && old.phase != JobPhase.closed) {
+        _notify(title, 'closed out', peer);
+      } else if (job.phase != old.phase || job.approver != old.approver) {
+        _notify(title, 'approved → ${_stageText(job)}', peer);
+      }
+    }
+  }
+
+  String _stageText(Job j) {
+    switch (j.phase) {
+      case JobPhase.approval:
+        return j.approver.tag;
+      case JobPhase.ta:
+        return 'off-ship (PE)';
+      case JobPhase.execution:
+        return j.inWork ? 'in work' : 'approved';
+      case JobPhase.closeout:
+        return 'closing (${j.approver.tag})';
+      case JobPhase.closed:
+        return 'closed';
+    }
   }
 
   /// Non-DIVO with no formation key: must scan the DIVO's QR to enter the mesh.
@@ -547,17 +646,17 @@ class _HomePageState extends State<HomePage> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final mine = _jobs.values
-        .where((j) => j.approver == _role && j.status != JobStatus.accepted)
-        .toList()
+    final mine = _jobs.values.where(_needsMyAction).toList()
       ..sort((a, b) => a.priority.compareTo(b.priority));
-    final board = _jobs.values.toList()
+    final board = _jobs.values.where((j) => !j.isClosed).toList()
+      ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
+    final completed = _jobs.values.where((j) => j.isClosed).toList()
       ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
 
     _peers = _node!.peerCount;
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Grapheion'),
@@ -586,9 +685,10 @@ class _HomePageState extends State<HomePage> {
                     Text('$_peers',
                         style: const TextStyle(color: Colors.white)),
                   ]),
-                  const TabBar(tabs: [
+                  const TabBar(isScrollable: true, tabs: [
                     Tab(text: 'INBOX'),
                     Tab(text: 'BOARD'),
+                    Tab(text: 'COMPLETED'),
                     Tab(text: 'MESH'),
                   ]),
                 ],
@@ -603,7 +703,8 @@ class _HomePageState extends State<HomePage> {
         ),
         body: TabBarView(children: [
           _jobList(mine, emptyText: 'No jobs awaiting your action.'),
-          _jobList(board, emptyText: 'No jobs yet. Originate one.'),
+          _jobList(board, emptyText: 'No active jobs. Originate one.'),
+          _jobList(completed, emptyText: 'No closed jobs yet.'),
           _connectionsPage(),
         ]),
       ),
@@ -812,7 +913,6 @@ class _HomePageState extends State<HomePage> {
       context: context,
       isScrollControlled: true,
       builder: (ctx) {
-        final canAct = job.approver == _role && job.status != JobStatus.accepted;
         final log = _events[job.id] ?? const [];
         return DraggableScrollableSheet(
           expand: false,
@@ -838,33 +938,161 @@ class _HomePageState extends State<HomePage> {
               Text('Chain of custody', style: Theme.of(ctx).textTheme.titleSmall),
               const SizedBox(height: 4),
               ...log.map((e) => _eventTile(e)),
-              if (canAct) ...[
-                const Divider(height: 24),
-                Row(children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        _approve(job);
-                        Navigator.pop(ctx);
-                      },
-                      icon: const Icon(Icons.check),
-                      label: Text(nextInChain(job.approver) == null
-                          ? 'Accept (off-ship)'
-                          : 'Approve → ${nextInChain(job.approver)!.tag}'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: () => _promptReturn(ctx, job),
-                    icon: const Icon(Icons.undo),
-                    label: const Text('Return'),
-                  ),
-                ]),
-              ],
+              ..._detailActions(ctx, job),
             ],
           ),
         );
       },
+    );
+  }
+
+  /// Phase-aware action buttons for the job detail sheet.
+  List<Widget> _detailActions(BuildContext ctx, Job job) {
+    final rows = <Widget>[];
+    void pop() => Navigator.pop(ctx);
+
+    Widget wide(String label, IconData icon, VoidCallback onTap) => SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+              onPressed: onTap, icon: Icon(icon), label: Text(label)),
+        );
+
+    Widget approveReturn(String approveLabel, VoidCallback onReturn) =>
+        Row(children: [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: () {
+                _approve(job);
+                pop();
+              },
+              icon: const Icon(Icons.check),
+              label: Text(approveLabel),
+            ),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: onReturn,
+            icon: const Icon(Icons.undo),
+            label: const Text('Return'),
+          ),
+        ]);
+
+    switch (job.phase) {
+      case JobPhase.approval:
+        if (job.approver == _role) {
+          final next = nextInChain(job.approver);
+          rows.add(approveReturn(
+              next == null ? 'Approve (DIVO)' : 'Approve → ${next.tag}',
+              () => _promptReturn(ctx, job)));
+          if (_role == Role.divo) {
+            rows.add(const SizedBox(height: 8));
+            rows.add(wide('Request off-ship assistance (TA)', Icons.sailing, () {
+              _requestTa(job);
+              pop();
+            }));
+          }
+        }
+        break;
+      case JobPhase.ta:
+        if (_role == Role.portEngineer) {
+          rows.add(Row(children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () {
+                  _engageTa(job);
+                  pop();
+                },
+                icon: const Icon(Icons.handshake),
+                label: const Text('Engage (accept)'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: () => _promptAction(
+                  ctx, 'Decline TA', 'Decline', (c) => _declineTa(job, c)),
+              icon: const Icon(Icons.close),
+              label: const Text('Decline'),
+            ),
+          ]));
+        }
+        break;
+      case JobPhase.execution:
+        if (_role == Role.technician) {
+          rows.add(wide(job.inWork ? 'Mark complete' : 'Start work',
+              job.inWork ? Icons.done_all : Icons.play_arrow, () {
+            job.inWork ? _markComplete(job) : _startWork(job);
+            pop();
+          }));
+        }
+        if (_role == Role.divo && !job.taRequested) {
+          rows.add(const SizedBox(height: 8));
+          rows.add(wide('Request off-ship assistance (TA)', Icons.sailing, () {
+            _requestTa(job);
+            pop();
+          }));
+        }
+        break;
+      case JobPhase.closeout:
+        if (job.approver == _role) {
+          final next = nextInChain(job.approver);
+          rows.add(Row(children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () {
+                  _approve(job);
+                  pop();
+                },
+                icon: const Icon(Icons.check),
+                label: Text(next == null
+                    ? 'Approve close-out (DIVO)'
+                    : 'Confirm → ${next.tag}'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: () => _promptAction(ctx, 'Reject close-out', 'Reject',
+                  (c) => _rejectCloseout(job, c)),
+              icon: const Icon(Icons.undo),
+              label: const Text('Reject'),
+            ),
+          ]));
+        }
+        break;
+      case JobPhase.closed:
+        break;
+    }
+    if (rows.isEmpty) return const [];
+    return [const Divider(height: 24), ...rows];
+  }
+
+  /// Generic comment dialog: runs [onSubmit] with the entered text, then closes
+  /// the dialog and the detail sheet ([sheetCtx]).
+  void _promptAction(BuildContext sheetCtx, String title, String submitLabel,
+      void Function(String) onSubmit) {
+    final c = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Reason / comment'),
+          maxLines: 2,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              onSubmit(c.text.trim());
+              Navigator.pop(ctx);
+              Navigator.pop(sheetCtx);
+            },
+            child: Text(submitLabel),
+          ),
+        ],
+      ),
     );
   }
 
@@ -875,8 +1103,15 @@ class _HomePageState extends State<HomePage> {
     final verb = {
           'originate': 'originated',
           'approve': 'approved',
-          'accept': 'accepted off-ship',
           'return': 'returned',
+          'ta_request': 'requested off-ship assistance (TA)',
+          'ta_engage': 'engaged — off-ship',
+          'ta_decline': 'declined TA',
+          'start_work': 'started work',
+          'complete': 'reported complete',
+          'close_confirm': 'confirmed close-out',
+          'close': 'closed out',
+          'close_reject': 'rejected close-out',
         }[e.action] ??
         e.action;
     return Padding(
@@ -935,7 +1170,7 @@ class _LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<_LoginScreen> {
   final _name = TextEditingController();
-  final _wc = TextEditingController(text: 'MP01');
+  final _wc = TextEditingController(text: 'CP01');
   Role _role = Role.technician;
 
   @override
@@ -971,7 +1206,7 @@ class _LoginScreenState extends State<_LoginScreen> {
                   onPressed: () {
                     final n = _name.text.trim();
                     if (n.isEmpty) return;
-                    widget.onLogin(n, _role, _wc.text.trim().isEmpty ? 'MP01' : _wc.text.trim());
+                    widget.onLogin(n, _role, _wc.text.trim().isEmpty ? 'CP01' : _wc.text.trim());
                   },
                   child: const Text('Enter Grapheion'),
                 ),
@@ -1001,15 +1236,16 @@ class _Peer {
 }
 
 class _Badge extends StatelessWidget {
-  const _Badge(this.text, {this.off = false});
+  const _Badge(this.text, {this.off = false, this.color});
   final String text;
   final bool off;
+  final Color? color;
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: off ? Colors.deepOrange : const Color(0xFF2E5E8C),
+        color: color ?? (off ? Colors.deepOrange : const Color(0xFF2E5E8C)),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(text,
@@ -1024,13 +1260,21 @@ class _StageChip extends StatelessWidget {
   final Job job;
   @override
   Widget build(BuildContext context) {
-    if (job.status == JobStatus.accepted) {
-      return const _Badge('ACCEPTED', off: true);
+    switch (job.phase) {
+      case JobPhase.approval:
+        return _Badge(
+            job.returned ? '↩ ${job.approver.tag}' : job.approver.tag,
+            off: job.approver.offShip);
+      case JobPhase.ta:
+        return const _Badge('TA · PORT ENG', off: true);
+      case JobPhase.execution:
+        return _Badge(job.inWork ? 'IN WORK' : 'APPROVED',
+            color: Colors.teal);
+      case JobPhase.closeout:
+        return _Badge('CLOSING · ${job.approver.tag}', color: Colors.indigo);
+      case JobPhase.closed:
+        return const _Badge('CLOSED', color: Colors.green);
     }
-    final label = job.status == JobStatus.returned
-        ? '↩ ${job.approver.tag}'
-        : job.approver.tag;
-    return _Badge(label, off: job.approver.offShip);
   }
 }
 

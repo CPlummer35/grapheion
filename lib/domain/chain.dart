@@ -69,15 +69,14 @@ extension RoleInfo on Role {
 Role roleFromToken(String t) =>
     Role.values.firstWhere((r) => r.name == t, orElse: () => Role.technician);
 
-/// Ordered approval stages a job passes through after the technician submits it.
-/// The technician originates; the job then climbs this ladder, ending off-ship.
+/// On-ship approval ladder a job climbs after the technician submits it
+/// (WCS → LPO → DIVO). The same three rungs are reused for the close-out chain.
+/// The Port Engineer is NOT on this ladder — the job reaches the PE only when
+/// the DIVO raises a Technical Assistance (TA) request for off-ship help.
 const List<Role> kApprovalChain = [
   Role.wcs,
   Role.lpo,
   Role.divo,
-  Role.threeMC,
-  Role.cheng,
-  Role.portEngineer,
 ];
 
 /// The role one rung up from [current], or null if [current] is the last rung

@@ -1,30 +1,36 @@
 // Grapheion — the job (corrective-maintenance work item) and its append-only
-// event log. Both are synced as peat documents; the event log is the audit
-// trail (who did what, when) and merges cleanly across the mesh.
+// event log. Both sync as peat documents; the event log is the audit trail.
 
 import 'chain.dart';
 
-/// Lifecycle status of a job as it moves through the chain.
-/// - inChain:  awaiting the current approver's action (climbing)
-/// - returned: sent back down for rework; the current owner must fix/re-approve
-/// - accepted: the port engineer accepted it off-ship (end of this POC's chain)
-enum JobStatus { inChain, returned, accepted }
+/// The phase a job is in; the UI and "whose turn is it" derive from this.
+/// - approval:  climbing the WCS -> LPO -> DIVO approval ladder
+/// - ta:        DIVO raised a Technical Assistance request; the off-ship Port
+///              Engineer is connected and must engage
+/// - execution: approved on-ship; the work center performs the work
+/// - closeout:  work reported done; climbing the WCS -> LPO -> DIVO close-out
+///              ladder
+/// - closed:    verified and closed (terminal; lives in the Completed tab)
+enum JobPhase { approval, ta, execution, closeout, closed }
 
-String jobStatusToken(JobStatus s) => s.name;
-JobStatus jobStatusFromToken(String t) =>
-    JobStatus.values.firstWhere((s) => s.name == t, orElse: () => JobStatus.inChain);
+String jobPhaseToken(JobPhase p) => p.name;
+JobPhase jobPhaseFromToken(String t) => JobPhase.values
+    .firstWhere((p) => p.name == t, orElse: () => JobPhase.approval);
 
 /// A corrective-maintenance work item (the deferred 2-Kilo / CSMP record).
 class Job {
   final String id;
   String title;
   String ein; // equipment identification number
-  String symptom; // description of the discrepancy
+  String symptom;
   int priority; // 1 (highest) .. 4
-  final String originator; // person who created it
-  final String workcenter; // e.g. "MP01"
-  Role approver; // the role whose action is currently pending
-  JobStatus status;
+  final String originator;
+  final String workcenter;
+  JobPhase phase;
+  Role approver; // whose action is pending in the active ladder
+  bool returned; // last approval/close-out step was a kick-back
+  bool inWork; // execution phase: work has started
+  bool taRequested; // a TA was raised at some point (history flag)
   final int createdAtMs;
   int updatedAtMs;
 
@@ -36,13 +42,15 @@ class Job {
     required this.priority,
     required this.originator,
     required this.workcenter,
+    required this.phase,
     required this.approver,
-    required this.status,
+    required this.returned,
+    required this.inWork,
+    required this.taRequested,
     required this.createdAtMs,
     required this.updatedAtMs,
   });
 
-  /// A freshly-originated job: submitted to the first chain stage (WCS).
   factory Job.originate({
     required String id,
     required String title,
@@ -61,31 +69,99 @@ class Job {
       priority: priority,
       originator: originator,
       workcenter: workcenter,
-      approver: kApprovalChain.first,
-      status: JobStatus.inChain,
+      phase: JobPhase.approval,
+      approver: kApprovalChain.first, // WCS
+      returned: false,
+      inWork: false,
+      taRequested: false,
       createdAtMs: nowMs,
       updatedAtMs: nowMs,
     );
   }
 
-  /// Advance the job: the current approver signs off. Moving past the last rung
-  /// (port engineer) marks it accepted off-ship.
+  bool get isClosed => phase == JobPhase.closed;
+
+  // --- Approval / close-out ladder (WCS -> LPO -> DIVO) ----------------------
+
+  /// Sign off in the active ladder. Advances the approver; completing the
+  /// approval ladder moves to execution, completing the close-out ladder closes
+  /// the job.
   void approve(int nowMs) {
+    returned = false;
     final next = nextInChain(approver);
-    if (next == null) {
-      status = JobStatus.accepted; // port engineer accepted it
-    } else {
-      approver = next;
-      status = JobStatus.inChain;
+    if (phase == JobPhase.approval) {
+      if (next == null) {
+        phase = JobPhase.execution; // DIVO approved -> work it on-ship
+        approver = Role.technician;
+      } else {
+        approver = next;
+      }
+    } else if (phase == JobPhase.closeout) {
+      if (next == null) {
+        phase = JobPhase.closed; // DIVO approved the close-out
+      } else {
+        approver = next;
+      }
     }
     updatedAtMs = nowMs;
   }
 
-  /// Send the job one rung back down for rework, with the reviewer's comment
-  /// carried in the event log.
+  /// Kick the job one rung back down the active ladder for rework.
   void returnDown(int nowMs) {
     approver = prevOwner(approver);
-    status = JobStatus.returned;
+    returned = true;
+    updatedAtMs = nowMs;
+  }
+
+  // --- TA (off-ship assistance; DIVO only) ----------------------------------
+
+  /// DIVO requests off-ship assistance — connects the Port Engineer.
+  void requestTa(int nowMs) {
+    phase = JobPhase.ta;
+    approver = Role.portEngineer;
+    taRequested = true;
+    returned = false;
+    updatedAtMs = nowMs;
+  }
+
+  /// Port Engineer engages the request; the job proceeds on-ship with off-ship
+  /// support arranged.
+  void engageTa(int nowMs) {
+    phase = JobPhase.execution;
+    approver = Role.technician;
+    updatedAtMs = nowMs;
+  }
+
+  /// Port Engineer declines; the job continues on-ship without off-ship help.
+  void declineTa(int nowMs) {
+    phase = JobPhase.execution;
+    approver = Role.technician;
+    returned = true;
+    updatedAtMs = nowMs;
+  }
+
+  // --- Execution ------------------------------------------------------------
+
+  void startWork(int nowMs) {
+    inWork = true;
+    approver = Role.technician;
+    updatedAtMs = nowMs;
+  }
+
+  /// Work reported done; opens the close-out ladder at WCS.
+  void markComplete(int nowMs) {
+    phase = JobPhase.closeout;
+    approver = kApprovalChain.first; // WCS
+    returned = false;
+    updatedAtMs = nowMs;
+  }
+
+  /// Close-out rejected (by WCS/LPO/DIVO); back to the work center for rework.
+  void rejectCloseout(int nowMs) {
+    phase = JobPhase.execution;
+    approver = Role.technician;
+    inWork = true;
+    returned = true;
     updatedAtMs = nowMs;
   }
 
@@ -97,8 +173,11 @@ class Job {
         'priority': priority,
         'originator': originator,
         'workcenter': workcenter,
+        'phase': jobPhaseToken(phase),
         'approver': approver.token,
-        'status': jobStatusToken(status),
+        'returned': returned,
+        'inWork': inWork,
+        'taRequested': taRequested,
         'createdAtMs': createdAtMs,
         'updatedAtMs': updatedAtMs,
       };
@@ -111,8 +190,11 @@ class Job {
         priority: (j['priority'] ?? 3) as int,
         originator: (j['originator'] ?? '') as String,
         workcenter: (j['workcenter'] ?? '') as String,
+        phase: jobPhaseFromToken((j['phase'] ?? 'approval') as String),
         approver: roleFromToken((j['approver'] ?? 'wcs') as String),
-        status: jobStatusFromToken((j['status'] ?? 'inChain') as String),
+        returned: (j['returned'] ?? false) as bool,
+        inWork: (j['inWork'] ?? false) as bool,
+        taRequested: (j['taRequested'] ?? false) as bool,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );
@@ -121,10 +203,10 @@ class Job {
 /// One entry in a job's append-only audit log.
 class JobEvent {
   final String jobId;
-  final int seq; // monotonically increasing per job
-  final String actor; // person name
-  final Role role; // role acting
-  final String action; // 'originate' | 'approve' | 'return' | 'accept'
+  final int seq;
+  final String actor;
+  final Role role;
+  final String action;
   final String comment;
   final int tsMs;
 
@@ -138,8 +220,6 @@ class JobEvent {
     required this.tsMs,
   });
 
-  /// Document id: jobId + zero-padded seq so the log sorts correctly and two
-  /// nodes never collide on the same (jobId, seq).
   String get docId => '$jobId-${seq.toString().padLeft(4, '0')}';
 
   Map<String, dynamic> toJson() => {
