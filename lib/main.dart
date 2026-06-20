@@ -270,6 +270,7 @@ class _HomePageState extends State<HomePage> {
       }).catchError((_) => null);
       _bleRxSub = _bleRxChannel.receiveBroadcastStream().listen(_onBleFrame);
       _bleRunning = true;
+      debugPrint('[BLE] radio started — listening for frames');
     } catch (_) {}
   }
 
@@ -326,6 +327,8 @@ class _HomePageState extends State<HomePage> {
       final docRaw = m['d'] as String;
       _applyDoc(coll, id, docRaw, remote: true, peer: null);
       _node?.putRaw(coll, id, docRaw); // persist + re-bridge over Iroh
+      // Visibility for BLE testing — a grapheion doc just crossed over Bluetooth.
+      if (coll == _kJobs || coll == _kLog) debugPrint('[BLE-RX] $coll · $id');
       if (mounted) setState(() {});
     } catch (_) {}
   }
