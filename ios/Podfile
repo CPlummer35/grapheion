@@ -1,0 +1,79 @@
+# platform :ios, '13.0'
+platform :ios, '16.0'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+  end
+
+  # peat_flutter is a source-less FFI pod: its vendored static libpeat_ffi.a
+  # links straight into the Runner executable (no peat_flutter.framework).
+  # In release, dead-code stripping drops the whole unreferenced archive —
+  # nothing in Swift/ObjC calls the C FFI entry points; they're only resolved
+  # at runtime via DynamicLibrary.process() → dlsym(RTLD_DEFAULT, ...).
+  #
+  # Fix on the Runner (app) target:
+  #   -all_load            force-link every symbol from the static archive
+  #   -export_dynamic      keep them in the executable's dynamic symbol table
+  #                        so dlsym can find them
+  #   DEAD_CODE_STRIPPING=NO / STRIP_INSTALLED_PRODUCT=NO  stop the release
+  #                        strip phase from removing them afterward
+  #   -framework ...       satisfy the now-forced peat-ffi Rust dep references
+  installer.aggregate_targets.each do |agg|
+    agg.user_project.native_targets.each do |target|
+      next unless target.name == 'Runner'
+      target.build_configurations.each do |config|
+        config.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
+        config.build_settings['STRIP_INSTALLED_PRODUCT'] = 'NO'
+        flags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+        flags = [flags] if flags.is_a?(String)
+        # Append idempotently: pod install runs on every build, so guard each
+        # flag to keep OTHER_LDFLAGS from growing on repeated installs.
+        add = lambda { |*fs| flags.concat(fs) unless fs.all? { |f| flags.include?(f) } }
+        add.call('-all_load')
+        add.call('-Xlinker', '-export_dynamic')
+        add.call('-framework', 'Network')
+        add.call('-framework', 'Security')
+        add.call('-framework', 'SystemConfiguration')
+        add.call('-framework', 'CoreBluetooth')
+        config.build_settings['OTHER_LDFLAGS'] = flags
+      end
+    end
+    agg.user_project.save
+  end
+end

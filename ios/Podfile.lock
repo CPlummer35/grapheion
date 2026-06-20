@@ -1,0 +1,28 @@
+PODS:
+  - device_info_plus (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - peat_flutter (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
+  - Flutter (from `Flutter`)
+  - peat_flutter (from `.symlinks/plugins/peat_flutter/ios`)
+
+EXTERNAL SOURCES:
+  device_info_plus:
+    :path: ".symlinks/plugins/device_info_plus/ios"
+  Flutter:
+    :path: Flutter
+  peat_flutter:
+    :path: ".symlinks/plugins/peat_flutter/ios"
+
+SPEC CHECKSUMS:
+  device_info_plus: 71ffc6ab7634ade6267c7a93088ed7e4f74e5896
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  peat_flutter: edf755267172b6c13a7d4b7ec6b3645118d964f0
+
+PODFILE CHECKSUM: 4a8e246df1786e2b43d1754082f333108749a0a4
+
+COCOAPODS: 1.16.2

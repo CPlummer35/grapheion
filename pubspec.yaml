@@ -1,0 +1,39 @@
+name: grapheion
+description: "Grapheion — mesh-synced corrective-maintenance approval chain (peat)."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  peat_flutter:
+    path: ../peat-flutter
+
+  cupertino_icons: ^1.0.8
+  path_provider: ^2.1.0
+  shared_preferences: ^2.3.0
+  device_info_plus: ^10.1.0
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.2.0
+  connectivity_plus: ^7.1.1
+  flutter_local_notifications: ^22.0.1
+
+  # Mobile BLE: uncomment when targeting Android/iOS with Dart-owned radio.
+  # Requires BLE runtime permissions (declared in android/app/src/main/AndroidManifest.xml
+  # and ios/Runner/Info.plist) and connection logic in main.dart.
+  # flutter_blue_plus: ^1.32.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - PEAT.png
