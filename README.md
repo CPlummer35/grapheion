@@ -7,8 +7,9 @@ Grapheion is built on [peat](https://github.com/defenseunicorns/peat)'s
 offline-first mesh: maintenance jobs and their full chain-of-custody sync
 peer-to-peer across a ship's devices (handhelds + always-on anchors) with no
 central server, and converge automatically as devices move between spaces and
-drop in and out of range. The off-ship Port Engineer is reached over the mesh
-relay.
+drop in and out of range. It meshes over **Wi-Fi/LAN**, the **n0 relay** (for
+the off-ship Port Engineer), **and Bluetooth LE** — so two handhelds in a
+compartment with no network still converge.
 
 ## What it does today
 
@@ -34,14 +35,30 @@ relay.
 - **QR-gated join** — the DIVO hosts the mesh: it mints a formation key carried
   in a join QR. Everyone else scans that QR once to join (the key + the host are
   remembered, so it's a one-time join). No key = no mesh.
+- **Dual transport** — syncs over Iroh/QUIC (Wi-Fi/mDNS + relay) **and Bluetooth
+  LE** in parallel, so handhelds in a space with no Wi-Fi still converge over
+  BLE. The Mesh tab shows which transport each peer is on.
+- **Mesh security** — the formation key gates membership on *both* transports.
+  Over Iroh it's peat's formation handshake; over BLE every frame is sealed with
+  **AES-256-GCM** under that key (encrypted **and** authenticated), so only
+  same-mesh nodes can read or inject frames. (FIPS-approved primitive.)
 
 ## Architecture
 
 Grapheion is a Flutter app that depends on the `peat_flutter` package (the mesh
 binding over the `peat-ffi` native library). It does not run its own server —
 the device mesh *is* the backend. Jobs, the audit log, and presence sync as peat
-documents over Iroh/QUIC (Wi-Fi/mDNS) and the n0 relay (for the off-ship PE).
-*(BLE transport for in-space handhelds is in progress.)*
+documents over **two transports in parallel**:
+
+- **Iroh/QUIC** — Wi-Fi/mDNS on the LAN, plus the n0 relay for the off-ship Port
+  Engineer. Key-gated by peat's formation handshake.
+- **Bluetooth LE** — a CRDT-over-BLE `0xAF`-frame bridge (peat's node-layer sync
+  is Iroh-only, so BLE rides alongside it). Each frame body is AES-256-GCM
+  sealed under the formation key. iOS/macOS only.
+
+Because every change is a CRDT document, the two transports converge harmlessly
+— a job edited over BLE and the same job synced over Wi-Fi merge to the same
+state.
 
 Repo layout this project expects (siblings under one parent):
 
@@ -101,7 +118,30 @@ code/
 > terminal with `flutter run -d macos` and log it in as a different role, or use
 > the in-app role switch.
 
+## Running on a phone (iOS)
+
+The app runs on iPhone too (BLE is supported on iOS + macOS). Build the iOS
+framework with `bash ios/build-rust.sh` from `peat-flutter`, then
+`flutter run -d <device>`. **Deploy over a USB cable** — wireless `flutter run`
+is unreliable at the launch step.
+
+To test **Bluetooth-only** sync: join both devices (scan the DIVO's QR), turn
+**Wi-Fi off on both**, keep them in BLE range, and a job created on one appears
+on the other over Bluetooth.
+
 ## Status
 
-Proof-of-concept. Identity and the audit log are modeled, but role authority is
-not yet *enforced* (gating is cooperative). Not for operational use.
+Proof-of-concept. Working: the full job lifecycle, QR-gated join, role
+switching, notifications, and a dual Iroh + BLE transport (BLE AES-256-GCM
+encrypted, both transports formation-key gated).
+
+Not done / not for operational use:
+
+- **Role authority is modeled but not enforced** — the audit log records who did
+  what, but the UI doesn't yet prevent the wrong role from acting (gating is
+  cooperative).
+- The off-ship Port Engineer is reached over the **relay**, but the QR join
+  itself is same-LAN today (cross-network PE onboarding is a follow-up).
+- BLE confidentiality is in place; broader hardening (RMF/ATO posture, key
+  rotation, upstream integration with the authoritative 3-M databases) is out of
+  scope for the prototype.
