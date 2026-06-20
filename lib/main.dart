@@ -54,21 +54,68 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   PeatFlutterNode.initialize();
   PeatNotifications.instance.init();
+  final tm = (await SharedPreferences.getInstance()).getString('themeMode');
+  grapheionThemeMode.value = tm == 'light'
+      ? ThemeMode.light
+      : tm == 'dark'
+          ? ThemeMode.dark
+          : ThemeMode.system;
   runApp(const GrapheionApp());
 }
+
+const _kSeed = Color(0xFF2E5E8C); // brand navy
+
+/// App-wide theme mode (light/dark/system), toggled from the app bar and
+/// persisted. `system` by default, so it follows the OS until the user picks.
+final ValueNotifier<ThemeMode> grapheionThemeMode =
+    ValueNotifier(ThemeMode.system);
+
+ThemeData _grapheionTheme(Brightness brightness) => ThemeData(
+      colorScheme: ColorScheme.fromSeed(seedColor: _kSeed, brightness: brightness),
+      useMaterial3: true,
+      // Keep the brand navy app bar in both modes so the white header reads.
+      appBarTheme: const AppBarTheme(
+        backgroundColor: _kSeed,
+        foregroundColor: Colors.white,
+      ),
+    );
+
+/// Flip between light and dark (resolving `system` to the current brightness),
+/// persisting the choice.
+void toggleGrapheionTheme(BuildContext context) {
+  final cur = grapheionThemeMode.value;
+  final brightness = cur == ThemeMode.system
+      ? MediaQuery.platformBrightnessOf(context)
+      : (cur == ThemeMode.dark ? Brightness.dark : Brightness.light);
+  final next = brightness == Brightness.dark ? ThemeMode.light : ThemeMode.dark;
+  grapheionThemeMode.value = next;
+  SharedPreferences.getInstance().then(
+      (p) => p.setString('themeMode', next == ThemeMode.dark ? 'dark' : 'light'));
+}
+
+/// Reusable app-bar action to toggle the theme.
+Widget themeToggleButton(BuildContext context) => IconButton(
+      onPressed: () => toggleGrapheionTheme(context),
+      icon: Icon(Theme.of(context).brightness == Brightness.dark
+          ? Icons.light_mode
+          : Icons.dark_mode),
+      tooltip: 'Toggle light / dark',
+    );
 
 class GrapheionApp extends StatelessWidget {
   const GrapheionApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Grapheion',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2E5E8C)),
-        useMaterial3: true,
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: grapheionThemeMode,
+      builder: (_, mode, __) => MaterialApp(
+        title: 'Grapheion',
+        theme: _grapheionTheme(Brightness.light),
+        darkTheme: _grapheionTheme(Brightness.dark),
+        themeMode: mode,
+        home: const HomePage(),
       ),
-      home: const HomePage(),
     );
   }
 }
@@ -788,6 +835,7 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('Grapheion'),
         actions: [
+          themeToggleButton(context),
           IconButton(
               onPressed: _signOut,
               icon: const Icon(Icons.logout),
@@ -847,6 +895,7 @@ class _HomePageState extends State<HomePage> {
         appBar: AppBar(
           title: const Text('Grapheion'),
           actions: [
+            themeToggleButton(context),
             IconButton(
                 onPressed: _signOut,
                 icon: const Icon(Icons.logout),
@@ -871,12 +920,18 @@ class _HomePageState extends State<HomePage> {
                     Text('$_peers',
                         style: const TextStyle(color: Colors.white)),
                   ]),
-                  const TabBar(isScrollable: true, tabs: [
-                    Tab(text: 'INBOX'),
-                    Tab(text: 'BOARD'),
-                    Tab(text: 'COMPLETED'),
-                    Tab(text: 'MESH'),
-                  ]),
+                  const TabBar(
+                    isScrollable: true,
+                    labelColor: Colors.white,
+                    unselectedLabelColor: Colors.white70,
+                    indicatorColor: Colors.white,
+                    tabs: [
+                      Tab(text: 'INBOX'),
+                      Tab(text: 'BOARD'),
+                      Tab(text: 'COMPLETED'),
+                      Tab(text: 'MESH'),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -1362,9 +1417,15 @@ class _LoginScreenState extends State<_LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 380),
+      body: SafeArea(
+        child: Stack(children: [
+          Align(
+            alignment: Alignment.topRight,
+            child: themeToggleButton(context),
+          ),
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1400,7 +1461,9 @@ class _LoginScreenState extends State<_LoginScreen> {
             ]),
           ),
         ),
-      ),
+          ),
+          ]),
+        ),
     );
   }
 }
