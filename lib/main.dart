@@ -852,6 +852,19 @@ class _HomePageState extends State<HomePage> {
       } else if (coll == _kCasreps) {
         _casreps[docId] =
             Casrep.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final acct = Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        _accounts[acct.id] = acct;
+        if (_account?.id == acct.id) {
+          // Our own account was edited remotely (e.g. an admin reassigned our
+          // role / work center) — adopt it live so it takes effect without a
+          // re-sign-in.
+          _account = acct;
+          _role = acct.role;
+          _workcenter = acct.workcenterId;
+          _name = acct.name;
+        } else {
+          _restoreAccount(); // our account may have just arrived (first sign-in)
+        }
       }
     } catch (_) {}
   }

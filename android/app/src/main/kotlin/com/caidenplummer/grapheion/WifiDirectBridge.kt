@@ -1,4 +1,4 @@
-package com.defenseunicorns.peat_flutter_example
+package com.caidenplummer.grapheion
 
 import android.util.Log
 import com.defenseunicorns.peat.PeatJni
