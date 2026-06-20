@@ -12,7 +12,7 @@ repositories {
 }
 
 android {
-    namespace = "com.defenseunicorns.peat_flutter_example"
+    namespace = "com.caidenplummer.grapheion"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -27,7 +27,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.defenseunicorns.peat_flutter_example"
+        applicationId = "com.caidenplummer.grapheion"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         // peat-btle requires API 26+ (BLE mesh); raise from flutter.minSdkVersion.
