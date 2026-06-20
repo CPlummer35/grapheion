@@ -39,6 +39,7 @@ const _kPresence = 'presence';
 const _kDepts = 'departments'; // managed org chart (synced like jobs)
 const _kDivs = 'divisions';
 const _kWcs = 'workcenters';
+const _kAccounts = 'accounts'; // synced personnel directory (PIN-protected)
 
 /// A peer is "online" if we've heard a presence beat from it within this window.
 const _kOnlineWindowMs = 30 * 1000;
@@ -132,10 +133,17 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   PeatFlutterNode? _node;
+  // Identity is the signed-in account; _name/_role/_workcenter mirror it so the
+  // rest of the app keeps working unchanged.
+  Account? _account;
   String _name = '';
   Role? _role;
   String _workcenter = 'CP01';
   String? _error;
+
+  final Map<String, Account> _accounts = {}; // synced personnel directory
+  bool _isMeshHost = false; // minted the key -> bootstraps the first admin
+  String? _pendingAccountId; // last signed-in account, restored once it syncs
 
   final Map<String, Job> _jobs = {};
   final OrgChart _org = OrgChart(); // synced org chart; drives role visibility
@@ -173,63 +181,95 @@ class _HomePageState extends State<HomePage> {
     return base64Encode(List<int>.generate(32, (_) => r.nextInt(256)));
   }
 
+  String _randHex(int bytes) {
+    final r = Random.secure();
+    return List.generate(
+        bytes, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// Restore mesh membership + the last signed-in account on launch.
   Future<void> _restoreIdentity() async {
     final p = await SharedPreferences.getInstance();
     _formationKey = p.getString('formationKey');
-    final role = p.getString('role');
-    final name = p.getString('name');
-    final wc = p.getString('workcenter');
-    if (role != null && name != null && name.isNotEmpty) {
-      _name = name;
-      _role = roleFromToken(role);
-      _workcenter = wc ?? 'CP01';
-      // The DIVO hosts a mesh: mint a key if we don't have one yet.
-      if (_role == Role.divo && _formationKey == null) {
-        _formationKey = _genKey();
-        await p.setString('formationKey', _formationKey!);
-      }
-      if (_formationKey != null) {
-        await _startNode();
-      } else {
-        setState(() {}); // non-DIVO with no key -> "scan to join" gate
-      }
+    // A device that minted the key is the host (migration: an old DIVO install
+    // that already hosts a mesh is treated as host so it can bootstrap admins).
+    _isMeshHost = (p.getBool('isMeshHost') ?? false) ||
+        (p.getString('role') == 'divo' && _formationKey != null);
+    if (_isMeshHost) await p.setBool('isMeshHost', true);
+    _pendingAccountId = p.getString('accountId');
+    if (_formationKey != null) {
+      await _startNode(); // node runs; _restoreAccount() fires after load
     } else {
-      setState(() {});
+      setState(() {}); // -> start screen (host a mesh / join one)
     }
   }
 
-  Future<void> _login(String name, Role role, String workcenter) async {
+  /// Create a fresh mesh and become its host (mints the formation key).
+  Future<void> _hostMesh() async {
     final p = await SharedPreferences.getInstance();
-    await p.setString('name', name);
-    await p.setString('role', role.token);
-    await p.setString('workcenter', workcenter);
-    _name = name;
-    _role = role;
-    _workcenter = workcenter;
-    if (role == Role.divo && _formationKey == null) {
-      _formationKey = _genKey();
-      await p.setString('formationKey', _formationKey!);
-    }
-    if (_node != null) {
-      // Role switch on a device that already joined: keep the node, just
-      // re-announce under the new role.
-      _publishPresence();
-      setState(() {});
-    } else if (_formationKey != null) {
-      await _startNode();
-    } else {
-      setState(() {}); // non-DIVO, no key -> scan to join
+    _formationKey = _genKey();
+    _isMeshHost = true;
+    await p.setString('formationKey', _formationKey!);
+    await p.setBool('isMeshHost', true);
+    await _startNode(); // seeds the org chart, then -> bootstrap sign-in
+  }
+
+  /// Adopt [a] as the signed-in identity and mirror it into _name/_role/_wc.
+  void _setAccount(Account a) {
+    _account = a;
+    _name = a.name;
+    _role = a.role;
+    _workcenter = a.workcenterId;
+    _pendingAccountId = a.id;
+    SharedPreferences.getInstance().then((p) => p.setString('accountId', a.id));
+    _publishPresence();
+    if (mounted) setState(() {});
+  }
+
+  /// Re-adopt the last account once it's present locally (after node load or a
+  /// later sync).
+  void _restoreAccount() {
+    final id = _pendingAccountId;
+    if (_account == null && id != null && _accounts.containsKey(id)) {
+      _setAccount(_accounts[id]!);
     }
   }
 
-  /// Clear the saved identity and return to the login screen. Keeps the node +
-  /// formation key alive so switching roles doesn't require re-joining.
+  /// Admin action: create + sync a PIN-protected account.
+  Account _createAccount({
+    required String name,
+    required String rate,
+    required Role role,
+    required String workcenterId,
+    required String pin,
+  }) {
+    final id = 'acct-${DateTime.now().microsecondsSinceEpoch}-${_randHex(3)}';
+    final salt = _randHex(16);
+    final a = Account(
+      id: id,
+      name: name,
+      rate: rate,
+      role: role,
+      workcenterId: workcenterId,
+      pinSalt: salt,
+      pinHash: hashPin(salt, pin),
+      createdAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    _accounts[id] = a;
+    final json = jsonEncode(a.toJson());
+    _node!.putRaw(_kAccounts, id, json);
+    _bleBroadcast(_kAccounts, id, json);
+    if (mounted) setState(() {});
+    return a;
+  }
+
+  /// Sign out of the account but stay in the mesh (node + key live on).
   Future<void> _signOut() async {
     final p = await SharedPreferences.getInstance();
-    await p.remove('name');
-    await p.remove('role');
-    await p.remove('workcenter');
+    await p.remove('accountId');
     setState(() {
+      _account = null;
+      _pendingAccountId = null;
       _role = null;
       _name = '';
     });
@@ -257,6 +297,7 @@ class _HomePageState extends State<HomePage> {
       _loadExisting(node);
       setState(() => _node = node);
       _seedOrgIfHost();
+      _restoreAccount(); // re-adopt the last signed-in account if it's local
       // Announce ourselves and start the heartbeat; refresh transports + the
       // freshness display on a tick.
       _publishPresence();
@@ -283,6 +324,9 @@ class _HomePageState extends State<HomePage> {
           for (final w in _org.workcenters.values) {
             _bleBroadcast(_kWcs, w.id, jsonEncode(w.toJson()));
           }
+          for (final a in _accounts.values) {
+            _bleBroadcast(_kAccounts, a.id, jsonEncode(a.toJson()));
+          }
         }
         if (mounted) setState(() {});
       });
@@ -301,7 +345,7 @@ class _HomePageState extends State<HomePage> {
 
   void _publishPresence() {
     final node = _node;
-    if (node == null) return;
+    if (node == null || _role == null) return; // no beat until signed in
     final json = jsonEncode({
       'nodeId': node.nodeId,
       'name': _name,
@@ -634,6 +678,15 @@ class _HomePageState extends State<HomePage> {
       final raw = node.getRaw(_kWcs, id);
       if (raw != null) _applyOrg(_kWcs, raw);
     }
+    for (final id in node.listDocuments(_kAccounts)) {
+      final raw = node.getRaw(_kAccounts, id);
+      if (raw != null) {
+        try {
+          _accounts[id] =
+              Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        } catch (_) {}
+      }
+    }
   }
 
   /// Fold one org-chart entity into the in-memory [_org].
@@ -698,6 +751,10 @@ class _HomePageState extends State<HomePage> {
         _ingestPresence(_node!, raw); // live beat -> local receive time
       } else if (coll == _kDepts || coll == _kDivs || coll == _kWcs) {
         _applyOrg(coll, raw);
+      } else if (coll == _kAccounts) {
+        _accounts[docId] =
+            Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        _restoreAccount(); // our account may have just arrived
       }
     } catch (_) {}
   }
@@ -725,7 +782,8 @@ class _HomePageState extends State<HomePage> {
   /// The mesh host (the DIVO who minted the key) seeds a starter org chart the
   /// first time it comes up, so the mesh isn't empty. Joiners receive it synced.
   void _seedOrgIfHost() {
-    if (_role != Role.divo || _org.workcenters.isNotEmpty) return;
+    // Runs at node start (before sign-in), so gate on host, not role.
+    if (!_isMeshHost || _org.workcenters.isNotEmpty) return;
     final seed = seedOrgChart();
     for (final d in seed.departments.values) {
       _org.departments[d.id] = d;
@@ -901,45 +959,6 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Non-DIVO with no formation key: must scan the DIVO's QR to enter the mesh.
-  Widget _joinGateScreen() {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Grapheion'),
-        actions: [
-          themeToggleButton(context),
-          IconButton(
-              onPressed: _signOut,
-              icon: const Icon(Icons.logout),
-              tooltip: 'Sign out'),
-        ],
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.qr_code_scanner, size: 64, color: Colors.grey),
-            const SizedBox(height: 16),
-            Text('$_name · ${_role!.tag}',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            const Text(
-              "Scan the DIVO's join QR to enter the mesh.\n"
-              'Until you do, you have no connection.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _openScanner,
-              icon: const Icon(Icons.qr_code_scanner),
-              label: const Text('Scan join QR'),
-            ),
-          ]),
-        ),
-      ),
-    );
-  }
-
   /// Whether the signed-in role may see [j] under the org-scoped rules. Until
   /// the org chart has synced (empty), don't filter — fall back to see-all.
   bool _canSee(Job j) {
@@ -955,13 +974,26 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_role == null) return _LoginScreen(onLogin: _login);
-    if (_role != Role.divo && _formationKey == null) return _joinGateScreen();
+    // 1. Mesh membership: host a new mesh or scan a join QR.
+    if (_formationKey == null) {
+      return _StartScreen(onHost: _hostMesh, onJoin: _openScanner);
+    }
     if (_error != null) {
       return Scaffold(body: Center(child: Text('Failed to start: $_error')));
     }
     if (_node == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    // 2. Account sign-in (pick your profile + PIN, or bootstrap the first admin).
+    if (_account == null) {
+      return _SignInScreen(
+        accounts: _accounts.values.toList()
+          ..sort((a, b) => a.name.compareTo(b.name)),
+        org: _org,
+        isHost: _isMeshHost,
+        onSignIn: _setAccount,
+        onCreate: _createAccount,
+      );
     }
 
     // Role-scoped visibility: a WCS/Tech sees their work center, LPO/DIVO their
@@ -981,11 +1013,24 @@ class _HomePageState extends State<HomePage> {
         appBar: AppBar(
           title: const Text('Grapheion'),
           actions: [
+            if (_account?.isAdmin ?? false)
+              IconButton(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => _AdminScreen(
+                    accounts: _accounts.values.toList()
+                      ..sort((a, b) => a.name.compareTo(b.name)),
+                    org: _org,
+                    onCreate: _createAccount,
+                  ),
+                )),
+                icon: const Icon(Icons.manage_accounts),
+                tooltip: 'Manage accounts',
+              ),
             themeToggleButton(context),
             IconButton(
                 onPressed: _signOut,
                 icon: const Icon(Icons.logout),
-                tooltip: 'Sign out / switch role'),
+                tooltip: 'Sign out / switch user'),
           ],
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(72),
@@ -1128,9 +1173,9 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
-  /// Mesh-tab header: the DIVO hosts the join QR; everyone else gets a scanner.
+  /// Mesh-tab header: the mesh host shows the join QR; everyone else a scanner.
   Widget _meshHeader() {
-    if (_role == Role.divo) {
+    if (_isMeshHost) {
       final token = _joinToken();
       return Card(
         margin: const EdgeInsets.all(12),
@@ -1492,17 +1537,11 @@ class _HomePageState extends State<HomePage> {
 
 // --- Login ------------------------------------------------------------------
 
-class _LoginScreen extends StatefulWidget {
-  const _LoginScreen({required this.onLogin});
-  final Future<void> Function(String name, Role role, String workcenter) onLogin;
-  @override
-  State<_LoginScreen> createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<_LoginScreen> {
-  final _name = TextEditingController();
-  final _wc = TextEditingController(text: 'CP01');
-  Role _role = Role.technician;
+/// Mesh entry: host a new mesh (become its admin) or scan a join QR.
+class _StartScreen extends StatelessWidget {
+  const _StartScreen({required this.onHost, required this.onJoin});
+  final Future<void> Function() onHost;
+  final Future<void> Function() onJoin;
 
   @override
   Widget build(BuildContext context) {
@@ -1510,50 +1549,402 @@ class _LoginScreenState extends State<_LoginScreen> {
       body: SafeArea(
         child: Stack(children: [
           Align(
-            alignment: Alignment.topRight,
-            child: themeToggleButton(context),
-          ),
+              alignment: Alignment.topRight, child: themeToggleButton(context)),
           Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 380),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text('Grapheion', style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 4),
-              const Text('Sign in as your role in the chain',
-                  style: TextStyle(color: Colors.grey)),
-              const SizedBox(height: 24),
-              TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name / rate')),
-              const SizedBox(height: 12),
-              TextField(controller: _wc, decoration: const InputDecoration(labelText: 'Work center')),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<Role>(
-                initialValue: _role,
-                decoration: const InputDecoration(labelText: 'Role'),
-                items: Role.values
-                    .map((r) => DropdownMenuItem(value: r, child: Text(r.title)))
-                    .toList(),
-                onChanged: (r) => setState(() => _role = r ?? Role.technician),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text('Grapheion',
+                      style: Theme.of(context).textTheme.headlineMedium),
+                  const SizedBox(height: 4),
+                  const Text('Corrective-maintenance mesh',
+                      style: TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 32),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: onHost,
+                      icon: const Icon(Icons.add_circle_outline),
+                      label: const Text('Create a new unit mesh'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: onJoin,
+                      icon: const Icon(Icons.qr_code_scanner),
+                      label: const Text('Join a mesh (scan QR)'),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    "Creating a mesh makes you its admin — you set up the org "
+                    "chart and accounts. Joining requires scanning the admin's QR.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ]),
               ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () {
-                    final n = _name.text.trim();
-                    if (n.isEmpty) return;
-                    widget.onLogin(n, _role, _wc.text.trim().isEmpty ? 'CP01' : _wc.text.trim());
-                  },
-                  child: const Text('Enter Grapheion'),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Account sign-in: bootstrap the first admin (host) or pick your profile + PIN.
+class _SignInScreen extends StatelessWidget {
+  const _SignInScreen({
+    required this.accounts,
+    required this.org,
+    required this.isHost,
+    required this.onSignIn,
+    required this.onCreate,
+  });
+  final List<Account> accounts;
+  final OrgChart org;
+  final bool isHost;
+  final void Function(Account) onSignIn;
+  final Account Function({
+    required String name,
+    required String rate,
+    required Role role,
+    required String workcenterId,
+    required String pin,
+  }) onCreate;
+
+  @override
+  Widget build(BuildContext context) {
+    // Bootstrap: the host with no accounts yet creates the first admin.
+    if (isHost && accounts.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(
+            title: const Text('Set up admin'),
+            actions: [themeToggleButton(context)]),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Create the admin account for this mesh. As DIVO or 3-M '
+                    'Coordinator you can then add everyone else.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                  const SizedBox(height: 20),
+                  _AccountForm(
+                    org: org,
+                    roles: const [Role.divo, Role.threeMC],
+                    initialRole: Role.divo,
+                    submitLabel: 'Create admin & sign in',
+                    onSubmit: (name, rate, role, wc, pin) => onSignIn(onCreate(
+                        name: name,
+                        rate: rate,
+                        role: role,
+                        workcenterId: wc,
+                        pin: pin)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return Scaffold(
+      appBar: AppBar(
+          title: const Text('Sign in'), actions: [themeToggleButton(context)]),
+      body: accounts.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text(
+                  'No accounts yet.\n\nAsk your admin (DIVO / 3-M Coordinator) '
+                  'to create your account — it appears here once it syncs.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey),
                 ),
               ),
-            ]),
+            )
+          : ListView(
+              children: [
+                for (final a in accounts)
+                  ListTile(
+                    leading: _Badge(a.role.tag),
+                    title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
+                    subtitle:
+                        Text('${a.role.title} · ${org.pathOf(a.workcenterId)}'),
+                    trailing: const Icon(Icons.lock_outline),
+                    onTap: () => _enterPin(context, a),
+                  ),
+              ],
+            ),
+    );
+  }
+
+  Future<void> _enterPin(BuildContext context, Account a) async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          String? err;
+          void check() {
+            if (a.checkPin(ctrl.text)) {
+              Navigator.pop(ctx, true);
+            } else {
+              setS(() => err = 'Incorrect PIN');
+            }
+          }
+
+          return AlertDialog(
+            title: Text('PIN for ${a.name}'),
+            content: TextField(
+              controller: ctrl,
+              obscureText: true,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(labelText: 'PIN', errorText: err),
+              onSubmitted: (_) => check(),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              FilledButton(onPressed: check, child: const Text('Sign in')),
+            ],
+          );
+        },
+      ),
+    );
+    if (ok == true) onSignIn(a);
+  }
+}
+
+/// Admin-only: list personnel and add accounts (assigned to org work centers).
+class _AdminScreen extends StatefulWidget {
+  const _AdminScreen(
+      {required this.accounts, required this.org, required this.onCreate});
+  final List<Account> accounts;
+  final OrgChart org;
+  final Account Function({
+    required String name,
+    required String rate,
+    required Role role,
+    required String workcenterId,
+    required String pin,
+  }) onCreate;
+  @override
+  State<_AdminScreen> createState() => _AdminScreenState();
+}
+
+class _AdminScreenState extends State<_AdminScreen> {
+  late List<Account> _accounts;
+  @override
+  void initState() {
+    super.initState();
+    _accounts = List.of(widget.accounts);
+  }
+
+  void _add() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Add person', style: Theme.of(ctx).textTheme.titleLarge),
+              const SizedBox(height: 16),
+              _AccountForm(
+                org: widget.org,
+                roles: Role.values,
+                submitLabel: 'Create account',
+                onSubmit: (name, rate, role, wc, pin) {
+                  final a = widget.onCreate(
+                      name: name,
+                      rate: rate,
+                      role: role,
+                      workcenterId: wc,
+                      pin: pin);
+                  setState(() => _accounts = [..._accounts, a]
+                    ..sort((x, y) => x.name.compareTo(y.name)));
+                  Navigator.pop(ctx);
+                },
+              ),
+            ],
           ),
         ),
-          ),
-          ]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Accounts')),
+      floatingActionButton: FloatingActionButton.extended(
+          onPressed: _add,
+          icon: const Icon(Icons.person_add),
+          label: const Text('Add person')),
+      body: _accounts.isEmpty
+          ? const Center(
+              child: Text('No accounts yet.',
+                  style: TextStyle(color: Colors.grey)))
+          : ListView(
+              children: [
+                for (final a in _accounts)
+                  ListTile(
+                    leading: _Badge(a.role.tag),
+                    title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
+                    subtitle: Text(
+                        '${a.role.title} · ${widget.org.pathOf(a.workcenterId)} · sees ${scopeLabel(a.role)}'),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+/// Shared form to create an account (name, rate, role, work center, PIN).
+class _AccountForm extends StatefulWidget {
+  const _AccountForm({
+    required this.org,
+    required this.roles,
+    required this.submitLabel,
+    required this.onSubmit,
+    this.initialRole,
+  });
+  final OrgChart org;
+  final List<Role> roles;
+  final String submitLabel;
+  final Role? initialRole;
+  final void Function(
+          String name, String rate, Role role, String workcenterId, String pin)
+      onSubmit;
+  @override
+  State<_AccountForm> createState() => _AccountFormState();
+}
+
+class _AccountFormState extends State<_AccountForm> {
+  final _name = TextEditingController();
+  final _rate = TextEditingController();
+  final _pin = TextEditingController();
+  final _pin2 = TextEditingController();
+  late Role _role;
+  String? _wc;
+  String? _err;
+
+  @override
+  void initState() {
+    super.initState();
+    _role = widget.initialRole ?? widget.roles.first;
+    final wcs = widget.org.workcenters.keys.toList()..sort();
+    _wc = wcs.isNotEmpty ? wcs.first : null;
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _rate.dispose();
+    _pin.dispose();
+    _pin2.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final n = _name.text.trim();
+    if (n.isEmpty) return setState(() => _err = 'Name is required');
+    if (_wc == null) {
+      return setState(() => _err = 'No work center — seed the org chart first');
+    }
+    if (_pin.text.length < 4) {
+      return setState(() => _err = 'PIN must be at least 4 digits');
+    }
+    if (_pin.text != _pin2.text) {
+      return setState(() => _err = 'PINs do not match');
+    }
+    widget.onSubmit(n, _rate.text.trim(), _role, _wc!, _pin.text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final wcs = widget.org.workcenters.values.toList()
+      ..sort((a, b) => a.id.compareTo(b.id));
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+            controller: _name,
+            decoration: const InputDecoration(labelText: 'Name')),
+        const SizedBox(height: 12),
+        TextField(
+            controller: _rate,
+            decoration:
+                const InputDecoration(labelText: 'Rate / rank (e.g. MM2)')),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<Role>(
+          initialValue: _role,
+          decoration: const InputDecoration(labelText: 'Role'),
+          items: widget.roles
+              .map((r) => DropdownMenuItem(value: r, child: Text(r.title)))
+              .toList(),
+          onChanged: (r) => setState(() => _role = r ?? _role),
         ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          initialValue: _wc,
+          decoration: const InputDecoration(labelText: 'Work center'),
+          items: wcs
+              .map((w) => DropdownMenuItem(
+                  value: w.id, child: Text('${w.id} · ${w.name}')))
+              .toList(),
+          onChanged: (v) => setState(() => _wc = v),
+        ),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _pin,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'PIN'),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: TextField(
+              controller: _pin2,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Confirm PIN'),
+            ),
+          ),
+        ]),
+        if (_err != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(_err!, style: const TextStyle(color: Colors.red)),
+          ),
+        const SizedBox(height: 20),
+        FilledButton(onPressed: _submit, child: Text(widget.submitLabel)),
+      ],
     );
   }
 }
