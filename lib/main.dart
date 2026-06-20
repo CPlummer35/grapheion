@@ -9,6 +9,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show NetworkInterface, InternetAddressType;
+import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -24,7 +25,6 @@ import 'notifications.dart';
 // POC unit credentials: every grapheion node on the same LAN/relay with this
 // app id + key forms one mesh ("the ship"). Replace the key for a real unit.
 const _kAppId = 'grapheion';
-const _kSharedKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 const _kJobs = 'jobs';
 const _kLog = 'joblog';
 const _kPresence = 'presence';
@@ -80,6 +80,10 @@ class _HomePageState extends State<HomePage> {
   Timer? _presenceTimer;
   Timer? _tickTimer;
   String? _lanIp; // resolved LAN IP, for the join token's dial address
+  // The mesh formation key. The DIVO mints one (the QR carries it); everyone
+  // else must scan that QR to obtain it before they can start a node. No key =>
+  // no mesh, so scanning the DIVO's QR is the only way in.
+  String? _formationKey;
 
   @override
   void initState() {
@@ -87,8 +91,14 @@ class _HomePageState extends State<HomePage> {
     _restoreIdentity();
   }
 
+  String _genKey() {
+    final r = Random.secure();
+    return base64Encode(List<int>.generate(32, (_) => r.nextInt(256)));
+  }
+
   Future<void> _restoreIdentity() async {
     final p = await SharedPreferences.getInstance();
+    _formationKey = p.getString('formationKey');
     final role = p.getString('role');
     final name = p.getString('name');
     final wc = p.getString('workcenter');
@@ -96,7 +106,16 @@ class _HomePageState extends State<HomePage> {
       _name = name;
       _role = roleFromToken(role);
       _workcenter = wc ?? 'MP01';
-      await _startNode();
+      // The DIVO hosts a mesh: mint a key if we don't have one yet.
+      if (_role == Role.divo && _formationKey == null) {
+        _formationKey = _genKey();
+        await p.setString('formationKey', _formationKey!);
+      }
+      if (_formationKey != null) {
+        await _startNode();
+      } else {
+        setState(() {}); // non-DIVO with no key -> "scan to join" gate
+      }
     } else {
       setState(() {});
     }
@@ -110,7 +129,33 @@ class _HomePageState extends State<HomePage> {
     _name = name;
     _role = role;
     _workcenter = workcenter;
-    await _startNode();
+    if (role == Role.divo && _formationKey == null) {
+      _formationKey = _genKey();
+      await p.setString('formationKey', _formationKey!);
+    }
+    if (_node != null) {
+      // Role switch on a device that already joined: keep the node, just
+      // re-announce under the new role.
+      _publishPresence();
+      setState(() {});
+    } else if (_formationKey != null) {
+      await _startNode();
+    } else {
+      setState(() {}); // non-DIVO, no key -> scan to join
+    }
+  }
+
+  /// Clear the saved identity and return to the login screen. Keeps the node +
+  /// formation key alive so switching roles doesn't require re-joining.
+  Future<void> _signOut() async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove('name');
+    await p.remove('role');
+    await p.remove('workcenter');
+    setState(() {
+      _role = null;
+      _name = '';
+    });
   }
 
   Future<void> _startNode() async {
@@ -118,7 +163,7 @@ class _HomePageState extends State<HomePage> {
       final dir = await getApplicationSupportDirectory();
       final node = PeatFlutterNode.create(NodeConfig(
         appId: _kAppId,
-        sharedKey: _kSharedKey,
+        sharedKey: _formationKey!,
         bindAddress: null,
         storagePath: '${dir.path}/grapheion',
         transport: const TransportConfigFFI(
@@ -238,33 +283,57 @@ class _HomePageState extends State<HomePage> {
     return s;
   }
 
-  /// Compact join token {node id, LAN addr} as base64(JSON) for the QR.
+  /// Compact join token {node id, LAN addr, formation key} as base64(JSON).
+  /// The key is what gates membership — it only leaves the DIVO via this QR.
   String? _joinToken() {
     final node = _node;
     final addr = _dialAddr();
-    if (node == null || addr == null) return null;
-    return base64Encode(utf8.encode(jsonEncode({'n': node.nodeId, 'a': addr})));
+    if (node == null || addr == null || _formationKey == null) return null;
+    return base64Encode(utf8.encode(
+        jsonEncode({'n': node.nodeId, 'a': addr, 'k': _formationKey})));
   }
 
-  /// Decode a scanned join token and dial that node into the mesh, remembering
-  /// it so the reconnect supervisor keeps the path up.
-  void _joinViaToken(String token) {
-    final node = _node;
-    if (node == null) return;
+  /// Decode a scanned join token: adopt the mesh's formation key (starting or
+  /// restarting our node under it), then dial the DIVO and remember it so the
+  /// reconnect supervisor keeps the path up.
+  Future<void> _joinViaToken(String token) async {
     try {
       final m = jsonDecode(utf8.decode(base64Decode(token.trim())))
           as Map<String, dynamic>;
       final id = m['n'] as String?;
       final addr = m['a'] as String?;
       final relay = m['r'] as String?;
+      final key = m['k'] as String?;
       if (id == null || id.isEmpty) throw const FormatException('no node id');
+
+      // Adopting the key is what actually puts us in this mesh. If it's new or
+      // different, (re)start the node under it.
+      if (key != null && key.isNotEmpty && key != _formationKey) {
+        _formationKey = key;
+        (await SharedPreferences.getInstance()).setString('formationKey', key);
+        if (_node != null) {
+          _presenceTimer?.cancel();
+          _tickTimer?.cancel();
+          _node!.dispose();
+          _node = null;
+        }
+        await _startNode();
+      } else if (_node == null && _formationKey != null) {
+        await _startNode();
+      }
+
+      final node = _node;
+      if (node == null) {
+        _snack('No mesh key — could not join');
+        return;
+      }
       node.connectPeerNowait(
         nodeId: id,
         addresses: (addr != null && addr.isNotEmpty) ? [addr] : const [],
         relayUrl: (relay != null && relay.startsWith('http')) ? relay : null,
       );
       node.rememberPeer(groupId: _kAppId, nodeId: id, name: '');
-      _snack('Joining ${id.substring(0, 8)}…');
+      _snack('Joined — dialing ${id.substring(0, 8)}…');
     } catch (e) {
       _snack('Invalid join code: $e');
     }
@@ -274,7 +343,7 @@ class _HomePageState extends State<HomePage> {
     final token = await Navigator.of(context).push<String>(
       MaterialPageRoute(builder: (_) => const _QrScanPage()),
     );
-    if (token != null && token.isNotEmpty) _joinViaToken(token);
+    if (token != null && token.isNotEmpty) await _joinViaToken(token);
   }
 
   void _snack(String msg) {
@@ -428,9 +497,49 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
+  /// Non-DIVO with no formation key: must scan the DIVO's QR to enter the mesh.
+  Widget _joinGateScreen() {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Grapheion'),
+        actions: [
+          IconButton(
+              onPressed: _signOut,
+              icon: const Icon(Icons.logout),
+              tooltip: 'Sign out'),
+        ],
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.qr_code_scanner, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text('$_name · ${_role!.tag}',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text(
+              "Scan the DIVO's join QR to enter the mesh.\n"
+              'Until you do, you have no connection.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _openScanner,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Scan join QR'),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_role == null) return _LoginScreen(onLogin: _login);
+    if (_role != Role.divo && _formationKey == null) return _joinGateScreen();
     if (_error != null) {
       return Scaffold(body: Center(child: Text('Failed to start: $_error')));
     }
@@ -452,6 +561,12 @@ class _HomePageState extends State<HomePage> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Grapheion'),
+          actions: [
+            IconButton(
+                onPressed: _signOut,
+                icon: const Icon(Icons.logout),
+                tooltip: 'Sign out / switch role'),
+          ],
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(72),
             child: Padding(
