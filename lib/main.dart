@@ -830,9 +830,19 @@ class _HomePageState extends State<HomePage> {
       } else if (coll == _kDepts || coll == _kDivs || coll == _kWcs) {
         _applyOrg(coll, raw);
       } else if (coll == _kAccounts) {
-        _accounts[docId] =
-            Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        _restoreAccount(); // our account may have just arrived
+        final acct = Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        _accounts[acct.id] = acct;
+        if (_account?.id == acct.id) {
+          // Our own account was edited remotely (e.g. an admin reassigned our
+          // role / work center) — adopt it live so it takes effect without a
+          // re-sign-in.
+          _account = acct;
+          _role = acct.role;
+          _workcenter = acct.workcenterId;
+          _name = acct.name;
+        } else {
+          _restoreAccount(); // our account may have just arrived (first sign-in)
+        }
       }
     } catch (_) {}
   }
