@@ -26,6 +26,7 @@ import 'package:peat_flutter/peat_flutter.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'domain/casrep.dart';
 import 'domain/chain.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
@@ -41,6 +42,7 @@ const _kDepts = 'departments'; // managed org chart (synced like jobs)
 const _kDivs = 'divisions';
 const _kWcs = 'workcenters';
 const _kAccounts = 'accounts'; // synced personnel directory (PIN-protected)
+const _kCasreps = 'casreps'; // CASREP reports (DIVO-generated, mesh-synced)
 
 /// A peer is "online" if we've heard a presence beat from it within this window.
 const _kOnlineWindowMs = 30 * 1000;
@@ -147,6 +149,7 @@ class _HomePageState extends State<HomePage> {
   String? _pendingAccountId; // last signed-in account, restored once it syncs
 
   final Map<String, Job> _jobs = {};
+  final Map<String, Casrep> _casreps = {};
   final OrgChart _org = OrgChart(); // synced org chart; drives role visibility
   final Map<String, List<JobEvent>> _events = {};
   int _peers = 0;
@@ -341,6 +344,7 @@ class _HomePageState extends State<HomePage> {
     _workcenter = 'CP01';
     _accounts.clear();
     _jobs.clear();
+    _casreps.clear();
     _events.clear();
     _presence.clear();
     _lastSeenMs.clear();
@@ -404,6 +408,9 @@ class _HomePageState extends State<HomePage> {
           }
           for (final a in _accounts.values) {
             _bleBroadcast(_kAccounts, a.id, jsonEncode(a.toJson()));
+          }
+          for (final c in _casreps.values) {
+            _bleBroadcast(_kCasreps, c.id, jsonEncode(c.toJson()));
           }
         }
         if (mounted) setState(() {});
@@ -765,6 +772,15 @@ class _HomePageState extends State<HomePage> {
         } catch (_) {}
       }
     }
+    for (final id in node.listDocuments(_kCasreps)) {
+      final raw = node.getRaw(_kCasreps, id);
+      if (raw != null) {
+        try {
+          _casreps[id] =
+              Casrep.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        } catch (_) {}
+      }
+    }
   }
 
   /// Fold one org-chart entity into the in-memory [_org].
@@ -830,6 +846,12 @@ class _HomePageState extends State<HomePage> {
       } else if (coll == _kDepts || coll == _kDivs || coll == _kWcs) {
         _applyOrg(coll, raw);
       } else if (coll == _kAccounts) {
+        _accounts[docId] =
+            Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        _restoreAccount(); // our account may have just arrived
+      } else if (coll == _kCasreps) {
+        _casreps[docId] =
+            Casrep.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final acct = Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         _accounts[acct.id] = acct;
         if (_account?.id == acct.id) {
@@ -860,6 +882,31 @@ class _HomePageState extends State<HomePage> {
     final json = jsonEncode(job.toJson());
     _node!.putRaw(_kJobs, job.id, json);
     _bleBroadcast(_kJobs, job.id, json);
+  }
+
+  void _saveCasrep(Casrep c) {
+    final json = jsonEncode(c.toJson());
+    _node!.putRaw(_kCasreps, c.id, json);
+    _bleBroadcast(_kCasreps, c.id, json);
+  }
+
+  /// Next sequential CASREP number for this mesh (zero-padded to 3 digits).
+  String _nextCasrepNumber() {
+    final n = _casreps.length + 1;
+    return n.toString().padLeft(3, '0');
+  }
+
+  /// True if any CASREP already covers this job.
+  bool _hasCasrep(String jobId) =>
+      _casreps.values.any((c) => c.jobId == jobId && c.type != CasrepType.cancel);
+
+  Casrep? _casrepForJob(String jobId) {
+    try {
+      return _casreps.values
+          .firstWhere((c) => c.jobId == jobId && c.type != CasrepType.cancel);
+    } catch (_) {
+      return null;
+    }
   }
 
   void _saveOrgEntity(String coll, String id, String json) {
@@ -1097,7 +1144,7 @@ class _HomePageState extends State<HomePage> {
     _peers = _node!.peerCount;
 
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Grapheion'),
@@ -1169,6 +1216,7 @@ class _HomePageState extends State<HomePage> {
                       Tab(text: 'INBOX'),
                       Tab(text: 'BOARD'),
                       Tab(text: 'COMPLETED'),
+                      Tab(text: 'CASREP'),
                       Tab(text: 'MESH'),
                     ],
                   ),
@@ -1186,6 +1234,7 @@ class _HomePageState extends State<HomePage> {
           _jobList(mine, emptyText: 'No jobs awaiting your action.'),
           _jobList(board, emptyText: 'No active jobs. Originate one.'),
           _jobList(completed, emptyText: 'No closed jobs yet.'),
+          _casrepPage(),
           _connectionsPage(),
         ]),
       ),
@@ -1210,6 +1259,291 @@ class _HomePageState extends State<HomePage> {
           onTap: () => _openDetail(j),
         );
       },
+    );
+  }
+
+  // --- CASREP tab -----------------------------------------------------------
+
+  bool get _canSeeCasreps =>
+      _role == Role.divo ||
+      _role == Role.threeMC ||
+      _role == Role.cheng ||
+      _role == Role.portEngineer;
+
+  Widget _casrepPage() {
+    if (!_canSeeCasreps) {
+      return const Center(
+        child: Text('CASREPs are visible to DIVO, 3MC, CHENG, and Port Engineer.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey)),
+      );
+    }
+    final active = _casreps.values
+        .where((c) => c.type != CasrepType.cancel)
+        .toList()
+      ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
+    final cancelled = _casreps.values
+        .where((c) => c.type == CasrepType.cancel)
+        .toList()
+      ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
+    final all = [...active, ...cancelled];
+    if (all.isEmpty) {
+      return const Center(
+        child: Text('No CASREPs filed yet.',
+            style: TextStyle(color: Colors.grey)),
+      );
+    }
+    return ListView.separated(
+      itemCount: all.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final c = all[i];
+        final cancelled = c.type == CasrepType.cancel;
+        return ListTile(
+          leading: _Badge(
+            'CR-${c.number}',
+            color: cancelled ? Colors.grey : null,
+          ),
+          title: Text(
+            c.wuc.isEmpty ? c.jobId : c.wuc,
+            style: TextStyle(
+                decoration: cancelled ? TextDecoration.lineThrough : null),
+          ),
+          subtitle: Text('${c.hull}  ·  ${opImpactLabel[c.opImpact]}  ·  ETR: ${c.etr.isEmpty ? 'TBD' : c.etr}'),
+          trailing: _Badge(
+            c.type.name.toUpperCase(),
+            color: cancelled
+                ? Colors.grey
+                : c.type == CasrepType.initial
+                    ? Colors.red.shade700
+                    : Colors.orange.shade700,
+          ),
+          onTap: () => _openCasrepDetail(c),
+        );
+      },
+    );
+  }
+
+  void _openCasrepDetail(Casrep c) {
+    final job = _jobs[c.jobId];
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.65,
+        maxChildSize: 0.95,
+        builder: (ctx, scroll) => ListView(
+          controller: scroll,
+          padding: const EdgeInsets.all(16),
+          children: [
+            Row(children: [
+              _Badge('CR-${c.number}'),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(c.wuc.isEmpty ? '(no WUC)' : c.wuc,
+                    style: Theme.of(ctx).textTheme.titleLarge),
+              ),
+              _Badge(c.type.name.toUpperCase(),
+                  color: c.type == CasrepType.cancel
+                      ? Colors.grey
+                      : c.type == CasrepType.initial
+                          ? Colors.red.shade700
+                          : Colors.orange.shade700),
+            ]),
+            const SizedBox(height: 4),
+            Text('${c.hull}  ·  ${opImpactLabel[c.opImpact]}  ·  ETR: ${c.etr.isEmpty ? 'TBD' : c.etr}',
+                style: const TextStyle(color: Colors.grey)),
+            if (job != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('Job: ${job.title.isEmpty ? c.jobId : job.title}',
+                    style: const TextStyle(color: Colors.grey)),
+              ),
+            const Divider(height: 20),
+            Text(c.narrative),
+            if (c.partsNeeded.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Parts/assist: ${c.partsNeeded}',
+                  style: const TextStyle(fontStyle: FontStyle.italic)),
+            ],
+            const Divider(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: c.toMessageText()));
+                  Navigator.pop(ctx);
+                  _snack('CASREP message copied');
+                },
+                icon: const Icon(Icons.copy),
+                label: const Text('Copy message text'),
+              ),
+            ),
+            if (_role == Role.divo && c.type != CasrepType.cancel) ...[
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _openCasrepDialog(job ?? _jobs.values.first, existing: c);
+                    },
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Update'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    c.type = CasrepType.cancel;
+                    c.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+                    _casreps[c.id] = c;
+                    _saveCasrep(c);
+                    Navigator.pop(ctx);
+                    setState(() {});
+                    _snack('CASREP ${c.number} cancelled');
+                  },
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: const Text('Cancel'),
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red),
+                ),
+              ]),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openCasrepDialog(Job job, {Casrep? existing}) {
+    final hullCtrl = TextEditingController(text: existing?.hull ?? '');
+    final wucCtrl = TextEditingController(text: existing?.wuc ?? '');
+    final narrativeCtrl =
+        TextEditingController(text: existing?.narrative ?? job.symptom);
+    final etrCtrl = TextEditingController(text: existing?.etr ?? '');
+    final partsCtrl = TextEditingController(text: existing?.partsNeeded ?? '');
+    OpImpact impact = existing?.opImpact ?? OpImpact.c2;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  existing == null
+                      ? 'Generate CASREP — ${job.title.isEmpty ? job.id : job.title}'
+                      : 'Update CASREP CR-${existing.number}',
+                  style: Theme.of(ctx).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 4),
+                Text('EIN: ${job.ein.isEmpty ? '—' : job.ein}  ·  P${job.priority}',
+                    style: const TextStyle(color: Colors.grey)),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: hullCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Hull designator',
+                      hintText: 'e.g. DDG-51'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: wucCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Work Unit Code (WUC)',
+                      hintText: 'e.g. HM000'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<OpImpact>(
+                  value: impact,
+                  decoration:
+                      const InputDecoration(labelText: 'Operational impact'),
+                  items: OpImpact.values
+                      .map((o) => DropdownMenuItem(
+                          value: o, child: Text(opImpactLabel[o]!)))
+                      .toList(),
+                  onChanged: (v) => setS(() => impact = v ?? impact),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: narrativeCtrl,
+                  decoration: const InputDecoration(labelText: 'Narrative'),
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: etrCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'ETR',
+                      hintText: 'e.g. 72 HRS, AWAITING PARTS'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: partsCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Parts / assistance required (optional)',
+                      hintText: 'NSN, nomenclature, or request type'),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: () {
+                    final now = DateTime.now().millisecondsSinceEpoch;
+                    final Casrep c;
+                    if (existing == null) {
+                      c = Casrep(
+                        id: 'CR-$now',
+                        jobId: job.id,
+                        number: _nextCasrepNumber(),
+                        type: CasrepType.initial,
+                        hull: hullCtrl.text.trim(),
+                        wuc: wucCtrl.text.trim(),
+                        opImpact: impact,
+                        etr: etrCtrl.text.trim(),
+                        narrative: narrativeCtrl.text.trim(),
+                        partsNeeded: partsCtrl.text.trim(),
+                        originator: _name,
+                        createdAtMs: now,
+                        updatedAtMs: now,
+                      );
+                    } else {
+                      existing.type = CasrepType.update;
+                      existing.hull = hullCtrl.text.trim();
+                      existing.wuc = wucCtrl.text.trim();
+                      existing.opImpact = impact;
+                      existing.etr = etrCtrl.text.trim();
+                      existing.narrative = narrativeCtrl.text.trim();
+                      existing.partsNeeded = partsCtrl.text.trim();
+                      existing.updatedAtMs = now;
+                      c = existing;
+                    }
+                    _casreps[c.id] = c;
+                    _saveCasrep(c);
+                    Navigator.pop(ctx);
+                    setState(() {});
+                    _snack(existing == null
+                        ? 'CASREP CR-${c.number} filed and syncing'
+                        : 'CASREP CR-${c.number} updated');
+                  },
+                  child: Text(existing == null ? 'File CASREP' : 'Save update'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1543,6 +1877,22 @@ class _HomePageState extends State<HomePage> {
         break;
       case JobPhase.closed:
         break;
+    }
+    // DIVO can generate or update a CASREP on any active job.
+    if (_role == Role.divo && job.phase != JobPhase.closed) {
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: 8));
+      final existing = _casrepForJob(job.id);
+      rows.add(SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: () {
+            pop();
+            _openCasrepDialog(job, existing: existing);
+          },
+          icon: const Icon(Icons.assignment_late_outlined),
+          label: Text(existing == null ? 'Generate CASREP' : 'Update CASREP'),
+        ),
+      ));
     }
     if (rows.isEmpty) return const [];
     return [const Divider(height: 24), ...rows];
