@@ -27,6 +27,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'domain/chain.dart';
 import 'domain/job.dart';
+import 'domain/org.dart';
 import 'notifications.dart';
 
 // POC unit credentials: every grapheion node on the same LAN/relay with this
@@ -35,6 +36,9 @@ const _kAppId = 'grapheion';
 const _kJobs = 'jobs';
 const _kLog = 'joblog';
 const _kPresence = 'presence';
+const _kDepts = 'departments'; // managed org chart (synced like jobs)
+const _kDivs = 'divisions';
+const _kWcs = 'workcenters';
 
 /// A peer is "online" if we've heard a presence beat from it within this window.
 const _kOnlineWindowMs = 30 * 1000;
@@ -134,6 +138,7 @@ class _HomePageState extends State<HomePage> {
   String? _error;
 
   final Map<String, Job> _jobs = {};
+  final OrgChart _org = OrgChart(); // synced org chart; drives role visibility
   final Map<String, List<JobEvent>> _events = {};
   int _peers = 0;
 
@@ -251,6 +256,7 @@ class _HomePageState extends State<HomePage> {
       node.subscribeChanges().listen(_onChange);
       _loadExisting(node);
       setState(() => _node = node);
+      _seedOrgIfHost();
       // Announce ourselves and start the heartbeat; refresh transports + the
       // freshness display on a tick.
       _publishPresence();
@@ -266,6 +272,16 @@ class _HomePageState extends State<HomePage> {
         if (_bleRunning && (_gossipTick++).isEven) {
           for (final job in _jobs.values) {
             _bleBroadcast(_kJobs, job.id, jsonEncode(job.toJson()));
+          }
+          // Re-broadcast the small org chart so late BLE joiners converge.
+          for (final d in _org.departments.values) {
+            _bleBroadcast(_kDepts, d.id, jsonEncode(d.toJson()));
+          }
+          for (final v in _org.divisions.values) {
+            _bleBroadcast(_kDivs, v.id, jsonEncode(v.toJson()));
+          }
+          for (final w in _org.workcenters.values) {
+            _bleBroadcast(_kWcs, w.id, jsonEncode(w.toJson()));
           }
         }
         if (mounted) setState(() {});
@@ -606,6 +622,35 @@ class _HomePageState extends State<HomePage> {
       final raw = node.getRaw(_kPresence, id);
       if (raw != null) _ingestPresence(node, raw, fromHeartbeat: true);
     }
+    for (final id in node.listDocuments(_kDepts)) {
+      final raw = node.getRaw(_kDepts, id);
+      if (raw != null) _applyOrg(_kDepts, raw);
+    }
+    for (final id in node.listDocuments(_kDivs)) {
+      final raw = node.getRaw(_kDivs, id);
+      if (raw != null) _applyOrg(_kDivs, raw);
+    }
+    for (final id in node.listDocuments(_kWcs)) {
+      final raw = node.getRaw(_kWcs, id);
+      if (raw != null) _applyOrg(_kWcs, raw);
+    }
+  }
+
+  /// Fold one org-chart entity into the in-memory [_org].
+  void _applyOrg(String coll, String raw) {
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      if (coll == _kDepts) {
+        final d = Department.fromJson(m);
+        _org.departments[d.id] = d;
+      } else if (coll == _kDivs) {
+        final v = Division.fromJson(m);
+        _org.divisions[v.id] = v;
+      } else if (coll == _kWcs) {
+        final w = WorkCenter.fromJson(m);
+        _org.workcenters[w.id] = w;
+      }
+    } catch (_) {}
   }
 
   void _ingestPresence(PeatFlutterNode node, String raw, {bool fromHeartbeat = false}) {
@@ -651,6 +696,8 @@ class _HomePageState extends State<HomePage> {
         _ingestEvent(JobEvent.fromJson(jsonDecode(raw) as Map<String, dynamic>));
       } else if (coll == _kPresence) {
         _ingestPresence(_node!, raw); // live beat -> local receive time
+      } else if (coll == _kDepts || coll == _kDivs || coll == _kWcs) {
+        _applyOrg(coll, raw);
       }
     } catch (_) {}
   }
@@ -668,6 +715,30 @@ class _HomePageState extends State<HomePage> {
     final json = jsonEncode(job.toJson());
     _node!.putRaw(_kJobs, job.id, json);
     _bleBroadcast(_kJobs, job.id, json);
+  }
+
+  void _saveOrgEntity(String coll, String id, String json) {
+    _node!.putRaw(coll, id, json);
+    _bleBroadcast(coll, id, json);
+  }
+
+  /// The mesh host (the DIVO who minted the key) seeds a starter org chart the
+  /// first time it comes up, so the mesh isn't empty. Joiners receive it synced.
+  void _seedOrgIfHost() {
+    if (_role != Role.divo || _org.workcenters.isNotEmpty) return;
+    final seed = seedOrgChart();
+    for (final d in seed.departments.values) {
+      _org.departments[d.id] = d;
+      _saveOrgEntity(_kDepts, d.id, jsonEncode(d.toJson()));
+    }
+    for (final v in seed.divisions.values) {
+      _org.divisions[v.id] = v;
+      _saveOrgEntity(_kDivs, v.id, jsonEncode(v.toJson()));
+    }
+    for (final w in seed.workcenters.values) {
+      _org.workcenters[w.id] = w;
+      _saveOrgEntity(_kWcs, w.id, jsonEncode(w.toJson()));
+    }
   }
 
   void _appendEvent(Job job, String action, String comment) {
@@ -869,6 +940,19 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// Whether the signed-in role may see [j] under the org-scoped rules. Until
+  /// the org chart has synced (empty), don't filter — fall back to see-all.
+  bool _canSee(Job j) {
+    if (_org.workcenters.isEmpty) return true;
+    return canSeeJob(
+      role: _role!,
+      viewerWorkcenterId: _workcenter,
+      jobWorkcenterId: j.workcenter,
+      jobHasTa: j.taRequested,
+      org: _org,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_role == null) return _LoginScreen(onLogin: _login);
@@ -880,11 +964,13 @@ class _HomePageState extends State<HomePage> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final mine = _jobs.values.where(_needsMyAction).toList()
+    // Role-scoped visibility: a WCS/Tech sees their work center, LPO/DIVO their
+    // division, CHENG their department, 3MC the ship, the PE only TA'd jobs.
+    final mine = _jobs.values.where((j) => _needsMyAction(j) && _canSee(j)).toList()
       ..sort((a, b) => a.priority.compareTo(b.priority));
-    final board = _jobs.values.where((j) => !j.isClosed).toList()
+    final board = _jobs.values.where((j) => !j.isClosed && _canSee(j)).toList()
       ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
-    final completed = _jobs.values.where((j) => j.isClosed).toList()
+    final completed = _jobs.values.where((j) => j.isClosed && _canSee(j)).toList()
       ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
 
     _peers = _node!.peerCount;
@@ -911,8 +997,12 @@ class _HomePageState extends State<HomePage> {
                   Row(children: [
                     _Badge(_role!.tag, off: _role!.offShip),
                     const SizedBox(width: 8),
-                    Text('$_name · $_workcenter',
-                        style: const TextStyle(color: Colors.white)),
+                    Flexible(
+                      child: Text(
+                          '$_name · $_workcenter · sees ${scopeLabel(_role!)}',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white)),
+                    ),
                     const Spacer(),
                     Icon(Icons.hub,
                         size: 16, color: Colors.white.withValues(alpha: 0.9)),
