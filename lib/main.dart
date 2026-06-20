@@ -6,6 +6,7 @@
 // relay. Jobs and their audit log sync as peat documents; the next approver is
 // notified on each hand-off.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -23,6 +24,10 @@ const _kAppId = 'grapheion';
 const _kSharedKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 const _kJobs = 'jobs';
 const _kLog = 'joblog';
+const _kPresence = 'presence';
+
+/// A peer is "online" if we've heard a presence beat from it within this window.
+const _kOnlineWindowMs = 30 * 1000;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,6 +68,14 @@ class _HomePageState extends State<HomePage> {
   final Map<String, Job> _jobs = {};
   final Map<String, List<JobEvent>> _events = {};
   int _peers = 0;
+
+  // Mesh presence: who else is on the net, how they're reachable, and when we
+  // last heard from them.
+  final Map<String, _Peer> _presence = {};
+  final Map<String, int> _lastSeenMs = {}; // local receive time per peer node id
+  final Map<String, TransportLink?> _transport = {};
+  Timer? _presenceTimer;
+  Timer? _tickTimer;
 
   @override
   void initState() {
@@ -117,9 +130,75 @@ class _HomePageState extends State<HomePage> {
       node.subscribeChanges().listen(_onChange);
       _loadExisting(node);
       setState(() => _node = node);
+      // Announce ourselves and start the heartbeat; refresh transports + the
+      // freshness display on a tick.
+      _publishPresence();
+      _refreshTransports();
+      _presenceTimer =
+          Timer.periodic(const Duration(seconds: 8), (_) => _publishPresence());
+      _tickTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+        _refreshTransports();
+        if (mounted) setState(() {});
+      });
     } catch (e) {
       setState(() => _error = '$e');
     }
+  }
+
+  @override
+  void dispose() {
+    _presenceTimer?.cancel();
+    _tickTimer?.cancel();
+    super.dispose();
+  }
+
+  void _publishPresence() {
+    final node = _node;
+    if (node == null) return;
+    node.putRaw(
+      _kPresence,
+      node.nodeId,
+      jsonEncode({
+        'nodeId': node.nodeId,
+        'name': _name,
+        'role': _role!.token,
+        'workcenter': _workcenter,
+        'hb': DateTime.now().millisecondsSinceEpoch,
+      }),
+    );
+  }
+
+  void _refreshTransports() {
+    final node = _node;
+    if (node == null) return;
+    _transport.clear();
+    for (final s in node.peerTransportStates()) {
+      _transport[s.peerId] = s.links.isNotEmpty ? s.links.first : null;
+    }
+  }
+
+  bool _online(String nid) {
+    final ls = _lastSeenMs[nid];
+    return ls != null &&
+        DateTime.now().millisecondsSinceEpoch - ls <= _kOnlineWindowMs;
+  }
+
+  /// Time since we last heard from [nid], in whole hours (or "<1h ago").
+  String _sinceText(String nid) {
+    final ls = _lastSeenMs[nid];
+    if (ls == null) return 'never seen';
+    final hours = (DateTime.now().millisecondsSinceEpoch - ls) / 3600000.0;
+    return hours < 1 ? '<1h ago' : '${hours.floor()}h ago';
+  }
+
+  /// Icon + label for how a peer is currently reachable.
+  (IconData, String) _transportFor(String nid) {
+    final link = _transport[nid];
+    if (link == null) return (Icons.cloud_queue, 'Relay / multi-hop');
+    final t = link.transportType.toLowerCase();
+    if (t.contains('ble') || t.contains('blue')) return (Icons.bluetooth, 'BLE');
+    if (link.pathKind == TransportPathKind.relay) return (Icons.cloud, 'Relay');
+    return (Icons.wifi, 'Direct (Wi-Fi)');
   }
 
   void _loadExisting(PeatFlutterNode node) {
@@ -139,6 +218,29 @@ class _HomePageState extends State<HomePage> {
         } catch (_) {}
       }
     }
+    for (final id in node.listDocuments(_kPresence)) {
+      final raw = node.getRaw(_kPresence, id);
+      if (raw != null) _ingestPresence(node, raw, fromHeartbeat: true);
+    }
+  }
+
+  void _ingestPresence(PeatFlutterNode node, String raw, {bool fromHeartbeat = false}) {
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      final nid = m['nodeId'] as String;
+      if (nid == node.nodeId) return; // skip ourselves
+      _presence[nid] = _Peer(
+        nodeId: nid,
+        name: (m['name'] ?? '') as String,
+        role: roleFromToken((m['role'] ?? 'technician') as String),
+        workcenter: (m['workcenter'] ?? '') as String,
+      );
+      // Live beats use local receive time (skew-proof); a cold-loaded doc seeds
+      // from the peer's own heartbeat until a live beat refreshes it.
+      _lastSeenMs[nid] = fromHeartbeat
+          ? (m['hb'] ?? 0) as int
+          : DateTime.now().millisecondsSinceEpoch;
+    } catch (_) {}
   }
 
   void _onChange(DocumentChange change) {
@@ -171,6 +273,11 @@ class _HomePageState extends State<HomePage> {
         _ingestEvent(JobEvent.fromJson(jsonDecode(raw) as Map<String, dynamic>));
         if (mounted) setState(() {});
       } catch (_) {}
+    } else if (change.collection == _kPresence) {
+      final raw = node.getRaw(_kPresence, change.docId);
+      if (raw == null) return;
+      _ingestPresence(node, raw); // live beat -> local receive time
+      if (mounted) setState(() {});
     }
   }
 
@@ -258,7 +365,7 @@ class _HomePageState extends State<HomePage> {
     _peers = _node!.peerCount;
 
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Grapheion'),
@@ -284,6 +391,7 @@ class _HomePageState extends State<HomePage> {
                   const TabBar(tabs: [
                     Tab(text: 'INBOX'),
                     Tab(text: 'BOARD'),
+                    Tab(text: 'MESH'),
                   ]),
                 ],
               ),
@@ -298,6 +406,7 @@ class _HomePageState extends State<HomePage> {
         body: TabBarView(children: [
           _jobList(mine, emptyText: 'No jobs awaiting your action.'),
           _jobList(board, emptyText: 'No jobs yet. Originate one.'),
+          _connectionsPage(),
         ]),
       ),
     );
@@ -319,6 +428,69 @@ class _HomePageState extends State<HomePage> {
               '${j.ein.isEmpty ? '—' : j.ein} · ${j.workcenter} · orig ${j.originator}'),
           trailing: _StageChip(job: j),
           onTap: () => _openDetail(j),
+        );
+      },
+    );
+  }
+
+  Widget _connectionsPage() {
+    final peers = _presence.values.toList()
+      ..sort((a, b) {
+        final ao = _online(a.nodeId) ? 0 : 1;
+        final bo = _online(b.nodeId) ? 0 : 1;
+        if (ao != bo) return ao - bo; // online first
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
+    if (peers.isEmpty) {
+      return const Center(
+        child: Text('No other nodes seen yet.',
+            style: TextStyle(color: Colors.grey)),
+      );
+    }
+    return ListView.separated(
+      itemCount: peers.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final p = peers[i];
+        final online = _online(p.nodeId);
+        final (icon, tlabel) = _transportFor(p.nodeId);
+        return ListTile(
+          leading: Icon(icon,
+              color:
+                  online ? Theme.of(context).colorScheme.primary : Colors.grey),
+          title: Row(children: [
+            Flexible(
+              child: Text(p.name.isEmpty ? p.nodeId.substring(0, 8) : p.name,
+                  overflow: TextOverflow.ellipsis),
+            ),
+            const SizedBox(width: 6),
+            _Badge(p.role.tag, off: p.role.offShip),
+          ]),
+          subtitle: Text('$tlabel · ${p.workcenter}'),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                      color: online ? Colors.green : Colors.grey,
+                      shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 5),
+                Text(online ? 'Online' : 'Offline',
+                    style: TextStyle(
+                        color: online ? Colors.green : Colors.grey,
+                        fontWeight: FontWeight.w600)),
+              ]),
+              if (!online)
+                Text(_sinceText(p.nodeId),
+                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            ],
+          ),
         );
       },
     );
@@ -555,7 +727,21 @@ class _LoginScreenState extends State<_LoginScreen> {
   }
 }
 
-// --- Small widgets ----------------------------------------------------------
+// --- Models / small widgets -------------------------------------------------
+
+/// A peer seen on the mesh, from its presence beat.
+class _Peer {
+  _Peer({
+    required this.nodeId,
+    required this.name,
+    required this.role,
+    required this.workcenter,
+  });
+  final String nodeId;
+  final String name;
+  final Role role;
+  final String workcenter;
+}
 
 class _Badge extends StatelessWidget {
   const _Badge(this.text, {this.off = false});
