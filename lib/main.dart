@@ -8,10 +8,13 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show NetworkInterface, InternetAddressType;
 
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:peat_flutter/peat_flutter.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'domain/chain.dart';
@@ -76,6 +79,7 @@ class _HomePageState extends State<HomePage> {
   final Map<String, TransportLink?> _transport = {};
   Timer? _presenceTimer;
   Timer? _tickTimer;
+  String? _lanIp; // resolved LAN IP, for the join token's dial address
 
   @override
   void initState() {
@@ -134,6 +138,7 @@ class _HomePageState extends State<HomePage> {
       // freshness display on a tick.
       _publishPresence();
       _refreshTransports();
+      _resolveLanIp();
       _presenceTimer =
           Timer.periodic(const Duration(seconds: 8), (_) => _publishPresence());
       _tickTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -199,6 +204,84 @@ class _HomePageState extends State<HomePage> {
     if (t.contains('ble') || t.contains('blue')) return (Icons.bluetooth, 'BLE');
     if (link.pathKind == TransportPathKind.relay) return (Icons.cloud, 'Relay');
     return (Icons.wifi, 'Direct (Wi-Fi)');
+  }
+
+  // --- Join QR (DIVO hosts; others scan) ------------------------------------
+
+  Future<void> _resolveLanIp() async {
+    try {
+      final ifaces =
+          await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final ni in ifaces) {
+        for (final a in ni.addresses) {
+          if (!a.isLoopback && !a.isLinkLocal) {
+            if (mounted) setState(() => _lanIp = a.address);
+            return;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// This node's dialable "host:port" — the bound socket address, with an
+  /// unspecified host (0.0.0.0 / ::) swapped for the resolved LAN IP.
+  String? _dialAddr() {
+    final s = _node?.endpointSocketAddr;
+    if (s == null || s.isEmpty) return null;
+    final i = s.lastIndexOf(':');
+    if (i <= 0) return null;
+    final host = s.substring(0, i);
+    final port = s.substring(i + 1);
+    final unspecified =
+        host == '0.0.0.0' || host == '::' || host == '[::]' || host.isEmpty;
+    if (unspecified) return _lanIp == null ? null : '$_lanIp:$port';
+    return s;
+  }
+
+  /// Compact join token {node id, LAN addr} as base64(JSON) for the QR.
+  String? _joinToken() {
+    final node = _node;
+    final addr = _dialAddr();
+    if (node == null || addr == null) return null;
+    return base64Encode(utf8.encode(jsonEncode({'n': node.nodeId, 'a': addr})));
+  }
+
+  /// Decode a scanned join token and dial that node into the mesh, remembering
+  /// it so the reconnect supervisor keeps the path up.
+  void _joinViaToken(String token) {
+    final node = _node;
+    if (node == null) return;
+    try {
+      final m = jsonDecode(utf8.decode(base64Decode(token.trim())))
+          as Map<String, dynamic>;
+      final id = m['n'] as String?;
+      final addr = m['a'] as String?;
+      final relay = m['r'] as String?;
+      if (id == null || id.isEmpty) throw const FormatException('no node id');
+      node.connectPeerNowait(
+        nodeId: id,
+        addresses: (addr != null && addr.isNotEmpty) ? [addr] : const [],
+        relayUrl: (relay != null && relay.startsWith('http')) ? relay : null,
+      );
+      node.rememberPeer(groupId: _kAppId, nodeId: id, name: '');
+      _snack('Joining ${id.substring(0, 8)}…');
+    } catch (e) {
+      _snack('Invalid join code: $e');
+    }
+  }
+
+  Future<void> _openScanner() async {
+    final token = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const _QrScanPage()),
+    );
+    if (token != null && token.isNotEmpty) _joinViaToken(token);
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
+    );
   }
 
   void _loadExisting(PeatFlutterNode node) {
@@ -441,13 +524,11 @@ class _HomePageState extends State<HomePage> {
         if (ao != bo) return ao - bo; // online first
         return a.name.toLowerCase().compareTo(b.name.toLowerCase());
       });
-    if (peers.isEmpty) {
-      return const Center(
-        child: Text('No other nodes seen yet.',
-            style: TextStyle(color: Colors.grey)),
-      );
-    }
-    return ListView.separated(
+    final Widget list = peers.isEmpty
+        ? const Center(
+            child: Text('No other nodes seen yet.',
+                style: TextStyle(color: Colors.grey)))
+        : ListView.separated(
       itemCount: peers.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (_, i) {
@@ -493,6 +574,67 @@ class _HomePageState extends State<HomePage> {
           ),
         );
       },
+    );
+    return Column(children: [
+      _meshHeader(),
+      Expanded(child: list),
+    ]);
+  }
+
+  /// Mesh-tab header: the DIVO hosts the join QR; everyone else gets a scanner.
+  Widget _meshHeader() {
+    if (_role == Role.divo) {
+      final token = _joinToken();
+      return Card(
+        margin: const EdgeInsets.all(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(children: [
+            const Text('Join the mesh',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 2),
+            const Text('Have personnel scan this to connect',
+                style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 12),
+            if (token == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: Text('Resolving network address…',
+                    style: TextStyle(color: Colors.grey)),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: QrImageView(
+                  data: token,
+                  version: QrVersions.auto,
+                  size: 200,
+                  backgroundColor: Colors.white,
+                  errorStateBuilder: (_, __) => const SizedBox(
+                    width: 200,
+                    height: 200,
+                    child: Center(child: Text('Token too long for QR')),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: _openScanner,
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('Scan join QR'),
+        ),
+      ),
     );
   }
 
@@ -786,6 +928,61 @@ class _PriorityDot extends StatelessWidget {
     return CircleAvatar(
       radius: 6,
       backgroundColor: colors[priority] ?? Colors.grey,
+    );
+  }
+}
+
+/// Full-screen camera scanner. Pops the first non-empty QR value back to the
+/// caller (a grapheion join token), which then dials that node into the mesh.
+class _QrScanPage extends StatefulWidget {
+  const _QrScanPage();
+  @override
+  State<_QrScanPage> createState() => _QrScanPageState();
+}
+
+class _QrScanPageState extends State<_QrScanPage> {
+  final MobileScannerController _controller =
+      MobileScannerController(formats: const [BarcodeFormat.qrCode]);
+  bool _handled = false; // detection fires repeatedly per frame
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_handled) return;
+    for (final b in capture.barcodes) {
+      final v = b.rawValue;
+      if (v != null && v.isNotEmpty) {
+        _handled = true;
+        Navigator.of(context).pop(v);
+        return;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Scan join QR')),
+      body: Stack(alignment: Alignment.center, children: [
+        MobileScanner(controller: _controller, onDetect: _onDetect),
+        Container(
+          width: 240,
+          height: 240,
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.white, width: 3),
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        const Positioned(
+          bottom: 48,
+          child: Text("Point at the DIVO's join QR",
+              style: TextStyle(color: Colors.white, fontSize: 16)),
+        ),
+      ]),
     );
   }
 }
