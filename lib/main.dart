@@ -10,10 +10,12 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show NetworkInterface, InternetAddressType;
+import 'dart:io' show NetworkInterface, InternetAddressType, Platform;
 import 'dart:math' show Random;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:peat_flutter/peat_flutter.dart';
@@ -33,6 +35,17 @@ const _kPresence = 'presence';
 
 /// A peer is "online" if we've heard a presence beat from it within this window.
 const _kOnlineWindowMs = 30 * 1000;
+
+// CRDT-over-BLE 0xAF frame format (matches the peat BleBridge wire format):
+//   [0xAF][transport][collLen][collection][msgId:u32][fragIdx:u8][fragCount:u8][chunk]
+// grapheion rides this in parallel with the Iroh path: each doc is broadcast as
+// one logical message (fragmented if > _kBleChunk), payload = {i: docId, d: json}.
+const _kBleTransport = 2;
+const _kBleHdr = 6; // msgId(4) + fragIdx(1) + fragCount(1)
+const _kBleChunk = 480;
+const _kReasmTtlMs = 15000;
+const _bleChannel = MethodChannel('peat/ble');
+const _bleRxChannel = EventChannel('peat/ble_rx');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -86,6 +99,13 @@ class _HomePageState extends State<HomePage> {
   // else must scan that QR to obtain it before they can start a node. No key =>
   // no mesh, so scanning the DIVO's QR is the only way in.
   String? _formationKey;
+
+  // BLE bridge (CRDT-over-BLE, parallel to the Iroh path) — iOS/macOS only.
+  StreamSubscription<dynamic>? _bleRxSub;
+  bool _bleRunning = false;
+  final Map<String, Map<int, Uint8List>> _reasm = {}; // "coll:msgId" -> fragments
+  final Map<String, int> _reasmTs = {};
+  int _gossipTick = 0;
 
   @override
   void initState() {
@@ -169,7 +189,7 @@ class _HomePageState extends State<HomePage> {
         bindAddress: null,
         storagePath: '${dir.path}/grapheion',
         transport: const TransportConfigFFI(
-          enableBle: false, // v0: Iroh/WiFi/relay mesh; BLE radio comes later
+          enableBle: true, // BLE mesh for in-space handhelds (alongside Iroh)
           bleMeshId: null,
           blePowerProfile: 'balanced',
           transportPreference: null,
@@ -186,10 +206,18 @@ class _HomePageState extends State<HomePage> {
       _publishPresence();
       _refreshTransports();
       _resolveLanIp();
+      _startBle();
       _presenceTimer =
           Timer.periodic(const Duration(seconds: 8), (_) => _publishPresence());
       _tickTimer = Timer.periodic(const Duration(seconds: 5), (_) {
         _refreshTransports();
+        // Periodic BLE catch-up gossip (every other tick ~10s): re-broadcast
+        // jobs so a handheld that just came into range converges.
+        if (_bleRunning && (_gossipTick++).isEven) {
+          for (final job in _jobs.values) {
+            _bleBroadcast(_kJobs, job.id, jsonEncode(job.toJson()));
+          }
+        }
         if (mounted) setState(() {});
       });
     } catch (e) {
@@ -201,23 +229,22 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _presenceTimer?.cancel();
     _tickTimer?.cancel();
+    _bleRxSub?.cancel();
     super.dispose();
   }
 
   void _publishPresence() {
     final node = _node;
     if (node == null) return;
-    node.putRaw(
-      _kPresence,
-      node.nodeId,
-      jsonEncode({
-        'nodeId': node.nodeId,
-        'name': _name,
-        'role': _role!.token,
-        'workcenter': _workcenter,
-        'hb': DateTime.now().millisecondsSinceEpoch,
-      }),
-    );
+    final json = jsonEncode({
+      'nodeId': node.nodeId,
+      'name': _name,
+      'role': _role!.token,
+      'workcenter': _workcenter,
+      'hb': DateTime.now().millisecondsSinceEpoch,
+    });
+    node.putRaw(_kPresence, node.nodeId, json);
+    _bleBroadcast(_kPresence, node.nodeId, json);
   }
 
   void _refreshTransports() {
@@ -227,6 +254,107 @@ class _HomePageState extends State<HomePage> {
     for (final s in node.peerTransportStates()) {
       _transport[s.peerId] = s.links.isNotEmpty ? s.links.first : null;
     }
+  }
+
+  // --- BLE bridge (CRDT-over-BLE; parallel to the Iroh path) ----------------
+
+  void _startBle() {
+    final node = _node;
+    if (node == null || _bleRunning) return;
+    if (!(Platform.isIOS || Platform.isMacOS)) return; // native bridge is Apple
+    try {
+      final bleNodeId = int.parse(node.nodeId.substring(0, 8), radix: 16);
+      _bleChannel.invokeMethod('startBle', {
+        'nodeId': bleNodeId,
+        'callsign': _name.isEmpty ? 'grapheion' : _name,
+      }).catchError((_) => null);
+      _bleRxSub = _bleRxChannel.receiveBroadcastStream().listen(_onBleFrame);
+      _bleRunning = true;
+    } catch (_) {}
+  }
+
+  /// Broadcast one document as a (possibly fragmented) 0xAF CRDT frame.
+  void _bleBroadcast(String coll, String docId, String docJson) {
+    if (!_bleRunning) return;
+    final collBytes = utf8.encode(coll);
+    final payload = utf8.encode(jsonEncode({'i': docId, 'd': docJson}));
+    int msgId = 0x811c9dc5; // FNV-1a — content-addressed so re-sends dedup
+    for (final b in payload) {
+      msgId = ((msgId ^ b) * 0x01000193) & 0xFFFFFFFF;
+    }
+    final fragCount =
+        payload.isEmpty ? 1 : ((payload.length + _kBleChunk - 1) ~/ _kBleChunk);
+    for (var idx = 0; idx < fragCount; idx++) {
+      final start = idx * _kBleChunk;
+      final end = (start + _kBleChunk < payload.length)
+          ? start + _kBleChunk
+          : payload.length;
+      final env = Uint8List(3 + collBytes.length + _kBleHdr + (end - start));
+      env[0] = 0xAF;
+      env[1] = _kBleTransport;
+      env[2] = collBytes.length;
+      env.setRange(3, 3 + collBytes.length, collBytes);
+      final h = 3 + collBytes.length;
+      env[h] = (msgId >> 24) & 0xFF;
+      env[h + 1] = (msgId >> 16) & 0xFF;
+      env[h + 2] = (msgId >> 8) & 0xFF;
+      env[h + 3] = msgId & 0xFF;
+      env[h + 4] = idx;
+      env[h + 5] = fragCount;
+      env.setRange(h + _kBleHdr, env.length, payload.sublist(start, end));
+      _bleChannel.invokeMethod('bleTx', env).catchError((_) => null);
+    }
+  }
+
+  void _onBleFrame(dynamic event) {
+    if (event is! Uint8List || event.length < 3 || event[0] != 0xAF) return;
+    final transport = event[1];
+    final collLen = event[2];
+    if (transport != _kBleTransport || event.length < 3 + collLen + _kBleHdr) {
+      return;
+    }
+    final coll = utf8.decode(event.sublist(3, 3 + collLen));
+    final frame = Uint8List.sublistView(event, 3 + collLen);
+    final msgId =
+        (frame[0] << 24) | (frame[1] << 16) | (frame[2] << 8) | frame[3];
+    final payload = _reassemble(coll, msgId, frame[4], frame[5],
+        Uint8List.sublistView(frame, _kBleHdr));
+    if (payload == null) return; // incomplete — await more fragments
+    try {
+      final m = jsonDecode(utf8.decode(payload)) as Map<String, dynamic>;
+      final id = m['i'] as String;
+      final docRaw = m['d'] as String;
+      _applyDoc(coll, id, docRaw, remote: true, peer: null);
+      _node?.putRaw(coll, id, docRaw); // persist + re-bridge over Iroh
+      if (mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  /// Reassemble a fragmented BLE message; full payload once all fragments are
+  /// in, else null. Partial sets are evicted after a TTL.
+  Uint8List? _reassemble(
+      String coll, int msgId, int fragIdx, int fragCount, Uint8List chunk) {
+    if (fragCount <= 1) return Uint8List.fromList(chunk);
+    final key = '$coll:$msgId';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _reasmTs.removeWhere((k, t) {
+      if (now - t <= _kReasmTtlMs) return false;
+      _reasm.remove(k);
+      return true;
+    });
+    final parts = _reasm.putIfAbsent(key, () => {});
+    parts[fragIdx] = Uint8List.fromList(chunk);
+    _reasmTs[key] = now;
+    if (parts.length < fragCount) return null;
+    final buf = BytesBuilder();
+    for (var i = 0; i < fragCount; i++) {
+      final p = parts[i];
+      if (p == null) return null;
+      buf.add(p);
+    }
+    _reasm.remove(key);
+    _reasmTs.remove(key);
+    return buf.toBytes();
   }
 
   bool _online(String nid) {
@@ -400,31 +528,29 @@ class _HomePageState extends State<HomePage> {
   void _onChange(DocumentChange change) {
     final node = _node;
     if (node == null) return;
-    if (change.collection == _kJobs) {
-      final raw = node.getRaw(_kJobs, change.docId);
-      if (raw == null) return;
-      try {
+    final raw = node.getRaw(change.collection, change.docId);
+    if (raw == null) return;
+    _applyDoc(change.collection, change.docId, raw,
+        remote: change.origin.isRemote, peer: change.origin.peerId);
+    if (mounted) setState(() {});
+  }
+
+  /// Apply an incoming document — from Iroh (subscribeChanges) OR a BLE frame —
+  /// to the in-memory model, notifying on remote changes.
+  void _applyDoc(String coll, String docId, String raw,
+      {required bool remote, String? peer}) {
+    try {
+      if (coll == _kJobs) {
         final job = Job.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final old = _jobs[job.id];
         _jobs[job.id] = job;
-        if (change.origin.isRemote) {
-          _notifyForChange(old, job, change.origin.peerId);
-        }
-        if (mounted) setState(() {});
-      } catch (_) {}
-    } else if (change.collection == _kLog) {
-      final raw = node.getRaw(_kLog, change.docId);
-      if (raw == null) return;
-      try {
+        if (remote) _notifyForChange(old, job, peer);
+      } else if (coll == _kLog) {
         _ingestEvent(JobEvent.fromJson(jsonDecode(raw) as Map<String, dynamic>));
-        if (mounted) setState(() {});
-      } catch (_) {}
-    } else if (change.collection == _kPresence) {
-      final raw = node.getRaw(_kPresence, change.docId);
-      if (raw == null) return;
-      _ingestPresence(node, raw); // live beat -> local receive time
-      if (mounted) setState(() {});
-    }
+      } else if (coll == _kPresence) {
+        _ingestPresence(_node!, raw); // live beat -> local receive time
+      }
+    } catch (_) {}
   }
 
   void _ingestEvent(JobEvent ev) {
@@ -436,8 +562,11 @@ class _HomePageState extends State<HomePage> {
 
   // --- Writes (sync over the mesh) -----------------------------------------
 
-  void _saveJob(Job job) =>
-      _node!.putRaw(_kJobs, job.id, jsonEncode(job.toJson()));
+  void _saveJob(Job job) {
+    final json = jsonEncode(job.toJson());
+    _node!.putRaw(_kJobs, job.id, json);
+    _bleBroadcast(_kJobs, job.id, json);
+  }
 
   void _appendEvent(Job job, String action, String comment) {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -451,7 +580,9 @@ class _HomePageState extends State<HomePage> {
       tsMs: now,
     );
     _ingestEvent(ev);
-    _node!.putRaw(_kLog, ev.docId, jsonEncode(ev.toJson()));
+    final json = jsonEncode(ev.toJson());
+    _node!.putRaw(_kLog, ev.docId, json);
+    _bleBroadcast(_kLog, ev.docId, json);
   }
 
   void _createJob({
