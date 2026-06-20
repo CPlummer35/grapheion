@@ -1268,9 +1268,11 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
-  /// Mesh-tab header: the mesh host shows the join QR; everyone else a scanner.
+  /// Mesh-tab header: admins (or the host) show the join QR to onboard people;
+  /// everyone else gets a scanner. Any member already holds the key, so an admin
+  /// can share it whether or not they originally minted the mesh.
   Widget _meshHeader() {
-    if (_isMeshHost) {
+    if (_isMeshHost || (_account?.isAdmin ?? false)) {
       final token = _joinToken();
       return Card(
         margin: const EdgeInsets.all(12),
