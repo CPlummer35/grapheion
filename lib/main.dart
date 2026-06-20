@@ -10,7 +10,8 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show NetworkInterface, InternetAddressType, Platform;
+import 'dart:io'
+    show Directory, NetworkInterface, InternetAddressType, Platform;
 import 'dart:math' show Random;
 import 'dart:typed_data';
 
@@ -289,6 +290,67 @@ class _HomePageState extends State<HomePage> {
       _role = null;
       _name = '';
     });
+  }
+
+  /// Confirm, then wipe ALL mesh state on this device and return to the start
+  /// screen — for spinning up a fresh mesh.
+  Future<void> _confirmReset(BuildContext context) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset this device?'),
+        content: const Text(
+            'Wipes the mesh key, every account, the org chart, and all jobs '
+            'from THIS device, and returns to the start screen. Other devices '
+            'keep their copy until you reset them too.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Reset')),
+        ],
+      ),
+    );
+    if (yes == true) await _resetDevice();
+  }
+
+  Future<void> _resetDevice() async {
+    _presenceTimer?.cancel();
+    _tickTimer?.cancel();
+    _bleRxSub?.cancel();
+    try {
+      _node?.dispose();
+    } catch (_) {}
+    _node = null;
+    _bleRunning = false;
+    final p = await SharedPreferences.getInstance();
+    await p.clear();
+    try {
+      final dir = await getApplicationSupportDirectory();
+      final store = Directory('${dir.path}/grapheion');
+      if (await store.exists()) await store.delete(recursive: true);
+    } catch (_) {}
+    _formationKey = null;
+    _isMeshHost = false;
+    _account = null;
+    _pendingAccountId = null;
+    _role = null;
+    _name = '';
+    _workcenter = 'CP01';
+    _accounts.clear();
+    _jobs.clear();
+    _events.clear();
+    _presence.clear();
+    _lastSeenMs.clear();
+    _transport.clear();
+    _org.departments.clear();
+    _org.divisions.clear();
+    _org.workcenters.clear();
+    _reasm.clear();
+    _reasmTs.clear();
+    if (mounted) setState(() {});
   }
 
   Future<void> _startNode() async {
@@ -1009,6 +1071,7 @@ class _HomePageState extends State<HomePage> {
         isHost: _isMeshHost,
         onSignIn: _setAccount,
         onCreate: _createAccount,
+        onReset: () => _confirmReset(context),
       );
     }
 
@@ -1044,10 +1107,25 @@ class _HomePageState extends State<HomePage> {
                 tooltip: 'Manage accounts',
               ),
             themeToggleButton(context),
-            IconButton(
-                onPressed: _signOut,
-                icon: const Icon(Icons.logout),
-                tooltip: 'Sign out / switch user'),
+            PopupMenuButton<String>(
+              tooltip: 'Account',
+              onSelected: (v) {
+                if (v == 'signout') _signOut();
+                if (v == 'reset') _confirmReset(context);
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                    value: 'signout',
+                    child: ListTile(
+                        leading: Icon(Icons.logout),
+                        title: Text('Sign out / switch user'))),
+                PopupMenuItem(
+                    value: 'reset',
+                    child: ListTile(
+                        leading: Icon(Icons.restart_alt),
+                        title: Text('Reset / leave mesh'))),
+              ],
+            ),
           ],
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(72),
@@ -1616,11 +1694,13 @@ class _SignInScreen extends StatelessWidget {
     required this.isHost,
     required this.onSignIn,
     required this.onCreate,
+    required this.onReset,
   });
   final List<Account> accounts;
   final OrgChart org;
   final bool isHost;
   final void Function(Account) onSignIn;
+  final VoidCallback onReset;
   final Account Function({
     required String name,
     required String rate,
@@ -1636,7 +1716,7 @@ class _SignInScreen extends StatelessWidget {
       return Scaffold(
         appBar: AppBar(
             title: const Text('Set up admin'),
-            actions: [themeToggleButton(context)]),
+            actions: [_resetButton(), themeToggleButton(context)]),
         body: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Center(
@@ -1674,7 +1754,8 @@ class _SignInScreen extends StatelessWidget {
     // Hybrid: pick an admin-created account (+ PIN), or self-register.
     return Scaffold(
       appBar: AppBar(
-          title: const Text('Sign in'), actions: [themeToggleButton(context)]),
+          title: const Text('Sign in'),
+          actions: [_resetButton(), themeToggleButton(context)]),
       body: ListView(
         children: [
           if (accounts.isEmpty)
@@ -1707,6 +1788,12 @@ class _SignInScreen extends StatelessWidget {
       ),
     );
   }
+
+  Widget _resetButton() => IconButton(
+        onPressed: onReset,
+        icon: const Icon(Icons.restart_alt),
+        tooltip: 'Reset / leave mesh',
+      );
 
   void _selfRegister(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute(
