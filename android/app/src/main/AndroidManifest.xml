@@ -12,6 +12,12 @@
     <!-- Android 13+ runtime permission for the local notifications that alert
          the user to remote mesh changes (PeatNotifications). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Mesh transport over Wi-Fi / relay (Iroh) + LAN discovery. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- QR join-code scanner (mobile_scanner). -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <application
         android:label="Grapheion"
         android:name="${applicationName}"

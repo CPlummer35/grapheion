@@ -17,6 +17,8 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications requires core library desugaring.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
@@ -68,4 +70,5 @@ dependencies {
     // frames through PeatBtle.broadcastBytes / onDecryptedData. Transitive deps
     // (jna, kotlinx-coroutines, androidx.core) come via the AAR's POM.
     implementation("com.defenseunicorns:peat-btle:0.4.0")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
