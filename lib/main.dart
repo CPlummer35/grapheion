@@ -804,15 +804,17 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() {});
   }
 
-  /// Record a PMS check as accomplished by the signed-in person (resets the
-  /// cycle) and sync it.
-  void _accomplishCheck(PmsCheck c) {
-    c.accomplish(_name, DateTime.now().millisecondsSinceEpoch);
+  /// Record a PMS check as accomplished by the signed-in person on [forDayMs]
+  /// (defaults to today) and sync it.
+  void _accomplishCheck(PmsCheck c, {int? forDayMs}) {
+    c.accomplish(_name, DateTime.now().millisecondsSinceEpoch,
+        forDayMs: forDayMs);
     _savePmsCheck(c);
   }
 
   PmsCheck _createPmsCheck({
-    required String mrc,
+    required String mip,
+    required int seq,
     required String title,
     required String ein,
     required Periodicity periodicity,
@@ -821,7 +823,8 @@ class _HomePageState extends State<HomePage> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final c = PmsCheck.create(
       id: 'pms-$now-${_randHex(3)}',
-      mrc: mrc,
+      mip: mip,
+      seq: seq,
       title: title,
       ein: ein,
       workcenter: _workcenter,
@@ -843,29 +846,26 @@ class _HomePageState extends State<HomePage> {
   void _seedBicyclePms() {
     final now = DateTime.now().millisecondsSinceEpoch;
     const ein = 'BIKE-1';
+    const mip = 'BCYL/001-26'; // the bicycle's Maintenance Index Page
     const day = 86400000;
-    // id, mrc, title, periodicity, est-min, last-done-days-ago (null = never).
-    // One per periodicity (D/W/2W/M/Q/S/A), back-dated for a status spread.
-    final seeds = <(String, String, String, Periodicity, int, int?)>[
-      ('pms-bike-001', 'BIKE/001', 'Inspect tires & check pressure',
-          Periodicity.daily, 5, 0), // scheduled
-      ('pms-bike-002', 'BIKE/002', 'Clean & lubricate chain',
-          Periodicity.weekly, 10, 9), // overdue
-      ('pms-bike-003', 'BIKE/003', 'Check & torque frame bolts',
-          Periodicity.biweekly, 10, 13), // due soon
-      ('pms-bike-004', 'BIKE/004', 'Clean headset bearing',
-          Periodicity.monthly, 20, 28), // due soon
-      ('pms-bike-005', 'BIKE/005', 'True wheels & check spoke tension',
-          Periodicity.quarterly, 45, 95), // overdue
-      ('pms-bike-006', 'BIKE/006', 'Bleed brakes', Periodicity.semiannual, 40,
-          175), // due soon
-      ('pms-bike-007', 'BIKE/007', 'Full drivetrain overhaul',
-          Periodicity.annual, 120, null), // never -> scheduled
+    // id, seq, title, periodicity, est-min, last-done-days-ago (null = never).
+    // One MRC per periodicity (D/W/2W/M/Q/S/A) + a situational (R); the MRC code
+    // is the periodicity code + seq (D-1, W-1, …). Back-dated for a status spread.
+    final seeds = <(String, int, String, Periodicity, int, int?)>[
+      ('pms-bike-001', 1, 'Inspect tires & check pressure', Periodicity.daily, 5, 0),
+      ('pms-bike-002', 1, 'Clean & lubricate chain', Periodicity.weekly, 10, 9),
+      ('pms-bike-003', 1, 'Check & torque frame bolts', Periodicity.biweekly, 10, 13),
+      ('pms-bike-004', 1, 'Clean headset bearing', Periodicity.monthly, 20, 28),
+      ('pms-bike-005', 1, 'True wheels & check spoke tension', Periodicity.quarterly, 45, 95),
+      ('pms-bike-006', 1, 'Bleed brakes', Periodicity.semiannual, 40, 175),
+      ('pms-bike-007', 1, 'Full drivetrain overhaul', Periodicity.annual, 120, null),
+      ('pms-bike-008', 1, 'Replace brake pads when worn', Periodicity.situational, 25, null),
     ];
     for (final s in seeds) {
       _savePmsCheck(PmsCheck(
         id: s.$1,
-        mrc: s.$2,
+        mip: mip,
+        seq: s.$2,
         title: s.$3,
         ein: ein,
         workcenter: _workcenter,
@@ -1375,21 +1375,30 @@ class _HomePageState extends State<HomePage> {
       return r != 0 ? r : a.nextDueMs.compareTo(b.nextDueMs);
     }
 
+    // Daily checks recur every day, so they appear on every day automatically;
+    // other checks appear on the one day they're placed.
     List<Widget> forDay(int dayMs) {
       final dc = checks
-          .where(
-              (c) => c.scheduledForMs != null && isSameDay(c.scheduledForMs!, dayMs))
+          .where((c) =>
+              c.periodicity == Periodicity.daily ||
+              (c.scheduledForMs != null &&
+                  isSameDay(c.scheduledForMs!, dayMs)))
           .toList()
         ..sort(byStatus);
       final dj = active.where(
           (j) => j.scheduledForMs != null && isSameDay(j.scheduledForMs!, dayMs));
       return [
-        for (final c in dc) _draggableTile(check: c),
-        for (final j in dj) _draggableTile(job: j),
+        for (final c in dc) _draggableTile(check: c, dayMs: dayMs),
+        for (final j in dj) _draggableTile(job: j, dayMs: dayMs),
       ];
     }
 
-    final poolChecks = checks.where((c) => !thisWeek(c.scheduledForMs)).toList()
+    // Pool = checks not placed this week (daily checks are excluded — they're
+    // already on every day) + active jobs not placed this week.
+    final poolChecks = checks
+        .where((c) =>
+            c.periodicity != Periodicity.daily && !thisWeek(c.scheduledForMs))
+        .toList()
       ..sort(byStatus);
     final pool = <Widget>[
       for (final c in poolChecks) _draggableTile(check: c),
@@ -1418,12 +1427,12 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
-  /// Board dot color. A check placed on a day is green once done, red if its
-  /// day passed without it, orange while still upcoming. Unscheduled checks use
-  /// the PMS due-status color (overdue/due/scheduled).
-  Color _checkDot(PmsCheck c, int nowMs) {
-    if (c.scheduledForMs == null) return _skedColors[c.statusAt(nowMs)]!;
-    switch (schedOutcome(c.scheduledForMs!, c.lastDoneMs, nowMs)) {
+  /// Board dot color. On a day ([dayMs] set), it's green once done that day, red
+  /// if the day passed without it, orange while still upcoming. In the pool
+  /// ([dayMs] null) it uses the PMS due-status color.
+  Color _checkDot(PmsCheck c, int? dayMs, int nowMs) {
+    if (dayMs == null) return _skedColors[c.statusAt(nowMs)]!;
+    switch (schedOutcome(done: c.doneOn(dayMs), dayMs: dayMs, nowMs: nowMs)) {
       case SchedOutcome.done:
         return Colors.green;
       case SchedOutcome.missed:
@@ -1434,6 +1443,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   String _dueText(PmsCheck c, int nowMs) {
+    if (!c.periodicity.isCalendar) return 'as required';
     final d = c.daysUntilDue(nowMs);
     switch (c.statusAt(nowMs)) {
       case PmsStatus.overdue:
@@ -1446,7 +1456,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _openAddCheck() {
-    final mrc = TextEditingController();
+    final mip = TextEditingController();
+    final seq = TextEditingController(text: '1');
     final title = TextEditingController();
     final ein = TextEditingController();
     final mins = TextEditingController(text: '15');
@@ -1470,9 +1481,9 @@ class _HomePageState extends State<HomePage> {
                     style: Theme.of(ctx).textTheme.titleLarge),
                 const SizedBox(height: 16),
                 TextField(
-                    controller: mrc,
+                    controller: mip,
                     decoration: const InputDecoration(
-                        labelText: 'MRC / MIP number (e.g. 5921/001-23)')),
+                        labelText: 'MIP number (e.g. 5921/023-14)')),
                 const SizedBox(height: 12),
                 TextField(
                     controller: title,
@@ -1497,9 +1508,19 @@ class _HomePageState extends State<HomePage> {
                       onChanged: (p) => setS(() => per = p ?? per),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   SizedBox(
-                    width: 110,
+                    width: 64,
+                    child: TextField(
+                      controller: seq,
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setS(() {}),
+                      decoration: const InputDecoration(labelText: 'Seq'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 84,
                     child: TextField(
                       controller: mins,
                       keyboardType: TextInputType.number,
@@ -1507,13 +1528,18 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 ]),
-                const SizedBox(height: 20),
+                const SizedBox(height: 6),
+                Text(
+                    'MRC code: ${per.code}-${int.tryParse(seq.text.trim()) ?? 1}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                const SizedBox(height: 16),
                 FilledButton(
                   onPressed: () {
-                    final m = mrc.text.trim();
+                    final m = mip.text.trim();
                     if (m.isEmpty) return;
                     _createPmsCheck(
-                      mrc: m,
+                      mip: m,
+                      seq: int.tryParse(seq.text.trim()) ?? 1,
                       title: title.text.trim(),
                       ein: ein.text.trim(),
                       periodicity: per,
@@ -1541,7 +1567,7 @@ class _HomePageState extends State<HomePage> {
               style: Theme.of(context).textTheme.titleMedium),
           const Spacer(),
           if (_canManageSked)
-            const Text('drag an item onto a day (or tap)',
+            const Text('drag onto a day · tap to assign',
                 style: TextStyle(color: Colors.grey, fontSize: 11)),
         ]),
       );
@@ -1593,12 +1619,14 @@ class _HomePageState extends State<HomePage> {
 
   /// Wraps a tile so a manager can drag it onto a day (click-drag on desktop,
   /// long-press-drag on touch so it doesn't fight list scrolling).
-  Widget _draggableTile({PmsCheck? check, Job? job}) {
-    final tile = _scheduleTile(check: check, job: job);
+  Widget _draggableTile({PmsCheck? check, Job? job, int? dayMs}) {
+    final tile = _scheduleTile(check: check, job: job, dayMs: dayMs);
     if (!_canManageSked) return tile;
+    // Daily checks are inherently every-day — not draggable to a single day.
+    if (check != null && check.periodicity == Periodicity.daily) return tile;
     final data = (check: check, job: job);
     final label = check != null
-        ? (check.title.isEmpty ? check.mrc : check.title)
+        ? (check.title.isEmpty ? check.mrcCode : check.title)
         : job!.title;
     final feedback = Material(
       color: Colors.transparent,
@@ -1638,9 +1666,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// A schedulable item on the board. PMS checks carry their full detail
-  /// (status dot, MRC/periodicity/EIN, due text, last-by) + an Accomplish
-  /// button; jobs show priority/EIN. Tap (managers) to assign/move the day.
-  Widget _scheduleTile({PmsCheck? check, Job? job}) {
+  /// (status dot, MIP · MRC code · EIN · due · assignee) + a Done button; jobs
+  /// show priority/EIN/assignee. [dayMs] is the day this tile renders on (null
+  /// in the pool). Tap (managers) to assign a person / move the day.
+  Widget _scheduleTile({PmsCheck? check, Job? job, int? dayMs}) {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (check != null) {
       return ListTile(
@@ -1651,18 +1680,20 @@ class _HomePageState extends State<HomePage> {
           height: 10,
           margin: const EdgeInsets.only(top: 6),
           decoration: BoxDecoration(
-              color: _checkDot(check, now), shape: BoxShape.circle),
+              color: _checkDot(check, dayMs, now), shape: BoxShape.circle),
         ),
-        title: Text(check.title.isEmpty ? check.mrc : check.title),
+        title: Text(check.title.isEmpty
+            ? '${check.mip} ${check.mrcCode}'
+            : check.title),
         subtitle: Text([
-          'MRC ${check.mrc}',
-          check.periodicity.code,
+          'MIP ${check.mip}',
+          check.mrcCode,
           if (check.ein.isNotEmpty) check.ein,
           _dueText(check, now),
-          if (!check.neverDone) 'last: ${check.lastBy}',
+          if (check.assignedTo.isNotEmpty) 'asgd: ${check.assignedTo}',
         ].join('  ·  ')),
         trailing: FilledButton.tonal(
-          onPressed: () => _accomplishCheck(check),
+          onPressed: () => _accomplishCheck(check, forDayMs: dayMs),
           style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
           child: const Text('Done'),
         ),
@@ -1674,8 +1705,12 @@ class _HomePageState extends State<HomePage> {
       dense: true,
       leading: const Icon(Icons.construction, size: 20),
       title: Text(j.title),
-      subtitle: Text(
-          'Job · PRI ${j.priority}${j.ein.isEmpty ? '' : ' · ${j.ein}'}'),
+      subtitle: Text([
+        'Job',
+        'PRI ${j.priority}',
+        if (j.ein.isNotEmpty) j.ein,
+        if (j.assignedTo.isNotEmpty) 'asgd: ${j.assignedTo}',
+      ].join('  ·  ')),
       trailing: _canManageSked ? const Icon(Icons.more_vert, size: 18) : null,
       onTap: _canManageSked ? () => _openScheduleAssign(job: j) : null,
     );
@@ -1688,44 +1723,125 @@ class _HomePageState extends State<HomePage> {
 
   void _openScheduleAssign({PmsCheck? check, Job? job}) {
     final days = weekDays(DateTime.now().millisecondsSinceEpoch);
-    final current = check?.scheduledForMs ?? job?.scheduledForMs;
+    final isDaily = check != null && check.periodicity == Periodicity.daily;
+    final wc = check?.workcenter ?? job!.workcenter;
+    final people = _store.accounts.values
+        .where((a) => a.workcenterId == wc)
+        .map((a) => a.name)
+        .toSet()
+        .toList()
+      ..sort();
     showModalBottomSheet(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              check != null
-                  ? (check.title.isEmpty ? check.mrc : check.title)
-                  : job!.title,
-              style: Theme.of(ctx).textTheme.titleMedium,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+        final assignedTo = check?.assignedTo ?? job?.assignedTo ?? '';
+        final current = check?.scheduledForMs ?? job?.scheduledForMs;
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    check != null
+                        ? (check.title.isEmpty
+                            ? '${check.mip} ${check.mrcCode}'
+                            : check.title)
+                        : job!.title,
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  child: Text('ASSIGN TO',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey,
+                          fontWeight: FontWeight.w600)),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Wrap(spacing: 6, children: [
+                    ChoiceChip(
+                      label: const Text('Unassigned'),
+                      selected: assignedTo.isEmpty,
+                      onSelected: (_) {
+                        _assignItem(check: check, job: job, person: '');
+                        setS(() {});
+                      },
+                    ),
+                    for (final p in people)
+                      ChoiceChip(
+                        label: Text(p),
+                        selected: assignedTo == p,
+                        onSelected: (_) {
+                          _assignItem(check: check, job: job, person: p);
+                          setS(() {});
+                        },
+                      ),
+                  ]),
+                ),
+                const Divider(height: 20),
+                if (isDaily)
+                  const ListTile(
+                    leading: Icon(Icons.repeat),
+                    title: Text('Performed daily — shown on every day'),
+                  )
+                else ...[
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    child: Text('DAY',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                  for (final d in days)
+                    ListTile(
+                      leading: const Icon(Icons.today),
+                      title: Text('${weekdayLabel(d)}   ${_shortDate(d)}'),
+                      trailing: (current != null && isSameDay(current, d))
+                          ? const Icon(Icons.check, color: Colors.green)
+                          : null,
+                      onTap: () {
+                        _scheduleItemForDay(check: check, job: job, dayMs: d);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  if (current != null)
+                    ListTile(
+                      leading: const Icon(Icons.clear),
+                      title: const Text('Unschedule'),
+                      onTap: () {
+                        _scheduleItemForDay(check: check, job: job, dayMs: null);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                ],
+                const SizedBox(height: 12),
+              ],
             ),
           ),
-          for (final d in days)
-            ListTile(
-              leading: const Icon(Icons.today),
-              title: Text('${weekdayLabel(d)}   ${_shortDate(d)}'),
-              trailing: (current != null && isSameDay(current, d))
-                  ? const Icon(Icons.check, color: Colors.green)
-                  : null,
-              onTap: () {
-                _scheduleItemForDay(check: check, job: job, dayMs: d);
-                Navigator.pop(ctx);
-              },
-            ),
-          if (current != null)
-            ListTile(
-              leading: const Icon(Icons.clear),
-              title: const Text('Unschedule'),
-              onTap: () {
-                _scheduleItemForDay(check: check, job: job, dayMs: null);
-                Navigator.pop(ctx);
-              },
-            ),
-        ]),
-      ),
+        );
+      }),
     );
+  }
+
+  void _assignItem({PmsCheck? check, Job? job, required String person}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (check != null) {
+      check.assignedTo = person;
+      check.updatedAtMs = now;
+      _savePmsCheck(check);
+    } else if (job != null) {
+      job.assignedTo = person;
+      job.updatedAtMs = now;
+      _saveJob(job);
+    }
+    if (mounted) setState(() {});
   }
 
   void _scheduleItemForDay({PmsCheck? check, Job? job, int? dayMs}) {

@@ -1,14 +1,17 @@
 // Grapheion — SKED: Planned Maintenance System (PMS) scheduling.
 //
-// A PMS check is a recurring maintenance requirement (an MRC) a work center
-// performs on a piece of equipment at a fixed periodicity. Its schedule state
-// (scheduled / due / overdue) is DERIVED from its periodicity + when it was
-// last accomplished, so the schedule recomputes itself as time passes — there's
-// no stored "status" to drift out of date. Synced over the mesh like jobs.
+// PMS hierarchy: a MIP (Maintenance Index Page, e.g. "5921/023-14") covers one
+// system/equipment and lists its MRCs (Maintenance Requirement Cards). Each MRC
+// is one task at one periodicity, identified within the MIP by its periodicity
+// code + sequence — e.g. "M-1", "D-2", "R-1". Calendar schedule state derives
+// from periodicity + last-done, so it recomputes itself. Synced over the mesh.
+
+import 'schedule.dart' show startOfDay;
 
 const _day = 86400000; // ms per day
 
-/// How often a check recurs. Comments give the Navy PMS periodicity code.
+/// PMS periodicity (Navy Table 7-1 subset). `situational` (R) is non-calendar —
+/// performed as required, with no fixed due date.
 enum Periodicity {
   daily, // D
   weekly, // W
@@ -17,10 +20,11 @@ enum Periodicity {
   quarterly, // Q
   semiannual, // S
   annual, // A
+  situational, // R — as required (no calendar due)
 }
 
 extension PeriodicityInfo on Periodicity {
-  /// Short PMS code (D / W / 2W / M / Q / S / A).
+  /// Short PMS code (D / W / 2W / M / Q / S / A / R).
   String get code {
     switch (this) {
       case Periodicity.daily:
@@ -37,6 +41,8 @@ extension PeriodicityInfo on Periodicity {
         return 'S';
       case Periodicity.annual:
         return 'A';
+      case Periodicity.situational:
+        return 'R';
     }
   }
 
@@ -56,10 +62,12 @@ extension PeriodicityInfo on Periodicity {
         return 'Semi-annual';
       case Periodicity.annual:
         return 'Annual';
+      case Periodicity.situational:
+        return 'Situational (as req\'d)';
     }
   }
 
-  /// Interval length in days (approximate for month-based periods).
+  /// Interval length in days. Situational has no calendar interval (0).
   int get days {
     switch (this) {
       case Periodicity.daily:
@@ -76,35 +84,44 @@ extension PeriodicityInfo on Periodicity {
         return 182;
       case Periodicity.annual:
         return 365;
+      case Periodicity.situational:
+        return 0;
     }
   }
+
+  /// Whether it recurs on the calendar (false for situational/as-required).
+  bool get isCalendar => this != Periodicity.situational;
 }
 
 String periodicityToken(Periodicity p) => p.name;
 Periodicity periodicityFromToken(String s) => Periodicity.values
     .firstWhere((p) => p.name == s, orElse: () => Periodicity.monthly);
 
-/// Derived schedule state of a check at a given moment.
+/// Derived calendar state of a check at a given moment.
 enum PmsStatus { scheduled, due, overdue }
 
-/// A PMS maintenance requirement (MRC) and its scheduling state.
+/// One MRC (Maintenance Requirement Card) + its scheduling state.
 class PmsCheck {
   final String id;
-  String mrc; // MRC/MIP number, e.g. "5921/001-23"
-  String title; // what the check covers
+  String mip; // Maintenance Index Page number, e.g. "5921/023-14"
+  int seq; // MRC sequence within the MIP for this periodicity (the n in "M-1")
+  String title;
   String ein; // equipment identification number
   String workcenter; // responsible work center
   Periodicity periodicity;
-  int estMinutes; // estimated man-minutes to perform
-  int? lastDoneMs; // last accomplishment (null = never done)
-  String lastBy; // who last accomplished it ('' if never)
-  int? scheduledForMs; // WCS-assigned day on the weekly schedule (null = none)
+  int estMinutes; // estimated man-minutes
+  int? lastDoneMs; // last accomplishment (null = never)
+  String lastBy; // who last accomplished it
+  List<int> doneDays; // day-start ms of every day it was accomplished
+  String assignedTo; // person the WCS assigned ('' = unassigned)
+  int? scheduledForMs; // WCS-assigned day (null = unplaced); daily = every day
   final int createdAtMs;
   int updatedAtMs;
 
   PmsCheck({
     required this.id,
-    required this.mrc,
+    required this.mip,
+    required this.seq,
     required this.title,
     required this.ein,
     required this.workcenter,
@@ -112,14 +129,17 @@ class PmsCheck {
     required this.estMinutes,
     required this.lastDoneMs,
     required this.lastBy,
+    List<int>? doneDays,
+    this.assignedTo = '',
     this.scheduledForMs,
     required this.createdAtMs,
     required this.updatedAtMs,
-  });
+  }) : doneDays = doneDays ?? [];
 
   factory PmsCheck.create({
     required String id,
-    required String mrc,
+    required String mip,
+    required int seq,
     required String title,
     required String ein,
     required String workcenter,
@@ -129,7 +149,8 @@ class PmsCheck {
   }) =>
       PmsCheck(
         id: id,
-        mrc: mrc,
+        mip: mip,
+        seq: seq,
         title: title,
         ein: ein,
         workcenter: workcenter,
@@ -141,22 +162,30 @@ class PmsCheck {
         updatedAtMs: nowMs,
       );
 
-  /// When the next accomplishment is due — one interval after it was last done
-  /// (or after it was created, if never done).
+  /// The MRC code within its MIP: periodicity code + sequence, e.g. "M-1".
+  String get mrcCode => '${periodicity.code}-$seq';
+
+  /// When the next accomplishment is due (calendar checks only).
   int get nextDueMs => (lastDoneMs ?? createdAtMs) + periodicity.days * _day;
 
   bool get neverDone => lastDoneMs == null;
 
-  /// Record an accomplishment, resetting the cycle.
-  void accomplish(String by, int nowMs) {
+  /// Record an accomplishment. [forDayMs] is the day it was performed (defaults
+  /// to now) — tracked per-day so daily checks reflect each day independently.
+  void accomplish(String by, int nowMs, {int? forDayMs}) {
+    final key = startOfDay(forDayMs ?? nowMs);
+    if (!doneDays.contains(key)) doneDays.add(key);
     lastDoneMs = nowMs;
     lastBy = by;
     updatedAtMs = nowMs;
   }
 
-  /// Schedule state at [nowMs]: overdue once past due, "due" within the
-  /// heads-up window (the last fifth of the period) before due, else scheduled.
+  /// Whether it was accomplished on [dayMs]'s calendar day.
+  bool doneOn(int dayMs) => doneDays.contains(startOfDay(dayMs));
+
+  /// Calendar state at [nowMs]. Situational checks have no due date.
   PmsStatus statusAt(int nowMs) {
+    if (!periodicity.isCalendar) return PmsStatus.scheduled;
     final next = nextDueMs;
     if (nowMs > next) return PmsStatus.overdue;
     final window = (periodicity.days * _day) ~/ 5;
@@ -164,12 +193,13 @@ class PmsCheck {
     return PmsStatus.scheduled;
   }
 
-  /// Days until due (negative if overdue).
+  /// Days until due (negative if overdue). Meaningless for situational checks.
   int daysUntilDue(int nowMs) => ((nextDueMs - nowMs) / _day).floor();
 
   Map<String, dynamic> toJson() => {
         'id': id,
-        'mrc': mrc,
+        'mip': mip,
+        'seq': seq,
         'title': title,
         'ein': ein,
         'workcenter': workcenter,
@@ -177,6 +207,8 @@ class PmsCheck {
         'estMinutes': estMinutes,
         'lastDoneMs': lastDoneMs,
         'lastBy': lastBy,
+        'doneDays': doneDays,
+        'assignedTo': assignedTo,
         'scheduledForMs': scheduledForMs,
         'createdAtMs': createdAtMs,
         'updatedAtMs': updatedAtMs,
@@ -184,14 +216,19 @@ class PmsCheck {
 
   factory PmsCheck.fromJson(Map<String, dynamic> j) => PmsCheck(
         id: j['id'] as String,
-        mrc: (j['mrc'] ?? '') as String,
+        // Back-compat: older docs used a free-text 'mrc' field for the number.
+        mip: (j['mip'] ?? j['mrc'] ?? '') as String,
+        seq: (j['seq'] ?? 1) as int,
         title: (j['title'] ?? '') as String,
         ein: (j['ein'] ?? '') as String,
         workcenter: (j['workcenter'] ?? '') as String,
-        periodicity: periodicityFromToken((j['periodicity'] ?? 'monthly') as String),
+        periodicity:
+            periodicityFromToken((j['periodicity'] ?? 'monthly') as String),
         estMinutes: (j['estMinutes'] ?? 0) as int,
         lastDoneMs: j['lastDoneMs'] as int?,
         lastBy: (j['lastBy'] ?? '') as String,
+        doneDays: (j['doneDays'] as List?)?.map((e) => e as int).toList(),
+        assignedTo: (j['assignedTo'] ?? '') as String,
         scheduledForMs: j['scheduledForMs'] as int?,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,

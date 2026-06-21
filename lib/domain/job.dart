@@ -32,6 +32,7 @@ class Job {
   bool inWork; // execution phase: work has started
   bool taRequested; // a TA was raised at some point (history flag)
   int? scheduledForMs; // WCS-assigned day on the weekly schedule (null = none)
+  String assignedTo; // person the WCS assigned on the schedule ('' = none)
   final int createdAtMs;
   int updatedAtMs;
 
@@ -49,6 +50,7 @@ class Job {
     required this.inWork,
     required this.taRequested,
     this.scheduledForMs,
+    this.assignedTo = '',
     required this.createdAtMs,
     required this.updatedAtMs,
   });
@@ -181,6 +183,7 @@ class Job {
         'inWork': inWork,
         'taRequested': taRequested,
         'scheduledForMs': scheduledForMs,
+        'assignedTo': assignedTo,
         'createdAtMs': createdAtMs,
         'updatedAtMs': updatedAtMs,
       };
@@ -199,6 +202,7 @@ class Job {
         inWork: (j['inWork'] ?? false) as bool,
         taRequested: (j['taRequested'] ?? false) as bool,
         scheduledForMs: j['scheduledForMs'] as int?,
+        assignedTo: (j['assignedTo'] ?? '') as String,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );

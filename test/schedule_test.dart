@@ -50,20 +50,21 @@ void main() {
     final pastDay = today - 2 * 86400000;
     final futureDay = today + 2 * 86400000;
 
-    test('past day, not done -> missed', () {
-      expect(schedOutcome(pastDay, null, now), SchedOutcome.missed);
-    });
-    test('past day, done before its day -> still missed', () {
-      expect(schedOutcome(pastDay, pastDay - 86400000, now),
+    test('not done + past day -> missed', () {
+      expect(schedOutcome(done: false, dayMs: pastDay, nowMs: now),
           SchedOutcome.missed);
     });
-    test('done on/after its scheduled day -> done', () {
-      expect(schedOutcome(pastDay, now, now), SchedOutcome.done);
-      expect(schedOutcome(pastDay, pastDay, now), SchedOutcome.done);
+    test('done -> done regardless of which day', () {
+      expect(schedOutcome(done: true, dayMs: pastDay, nowMs: now),
+          SchedOutcome.done);
+      expect(schedOutcome(done: true, dayMs: today, nowMs: now),
+          SchedOutcome.done);
     });
-    test('today or future, not done -> upcoming', () {
-      expect(schedOutcome(today, null, now), SchedOutcome.upcoming);
-      expect(schedOutcome(futureDay, null, now), SchedOutcome.upcoming);
+    test('not done + today or future -> upcoming', () {
+      expect(schedOutcome(done: false, dayMs: today, nowMs: now),
+          SchedOutcome.upcoming);
+      expect(schedOutcome(done: false, dayMs: futureDay, nowMs: now),
+          SchedOutcome.upcoming);
     });
   });
 }

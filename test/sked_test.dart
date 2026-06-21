@@ -8,7 +8,8 @@ const _day = 86400000;
 
 PmsCheck _weekly({int created = 1000}) => PmsCheck.create(
       id: 'P1',
-      mrc: '5921/001-23',
+      mip: '5921/023-14',
+      seq: 1,
       title: 'Lube main shaft bearing',
       ein: 'EIN-1',
       workcenter: 'CP01',
@@ -71,17 +72,72 @@ void main() {
     });
   });
 
+  group('MIP / MRC identity', () {
+    test('MRC code is periodicity code + sequence', () {
+      expect(_weekly().mrcCode, 'W-1');
+      final m = PmsCheck.create(
+        id: 'P2',
+        mip: '5921/023-14',
+        seq: 3,
+        title: 'x',
+        ein: '',
+        workcenter: 'CP01',
+        periodicity: Periodicity.monthly,
+        estMinutes: 10,
+        nowMs: 0,
+      );
+      expect(m.mrcCode, 'M-3');
+    });
+  });
+
+  group('situational (R)', () {
+    final r = PmsCheck.create(
+      id: 'R1',
+      mip: '5921/023-14',
+      seq: 1,
+      title: 'Replace pads when worn',
+      ein: '',
+      workcenter: 'CP01',
+      periodicity: Periodicity.situational,
+      estMinutes: 20,
+      nowMs: 0,
+    );
+    test('code R, non-calendar, never due', () {
+      expect(r.periodicity.code, 'R');
+      expect(r.periodicity.isCalendar, isFalse);
+      expect(r.statusAt(9999 * _day), PmsStatus.scheduled);
+    });
+  });
+
+  group('per-day accomplishment', () {
+    test('doneOn tracks each performed day independently', () {
+      final c = _weekly(created: 0);
+      final d1 = DateTime(2026, 6, 15, 9).millisecondsSinceEpoch;
+      final d2 = DateTime(2026, 6, 16, 9).millisecondsSinceEpoch;
+      c.accomplish('tech', d1);
+      expect(c.doneOn(d1), isTrue);
+      expect(c.doneOn(d2), isFalse);
+      c.accomplish('tech', d2);
+      expect(c.doneOn(d1), isTrue); // earlier day still recorded
+      expect(c.doneOn(d2), isTrue);
+    });
+  });
+
   group('round-trip', () {
     test('serializes and parses back identically', () {
       final c = _weekly(created: 1000)
         ..accomplish('MM2 Smith', 50 * _day)
+        ..assignedTo = 'FN Jones'
         ..scheduledForMs = 99 * _day;
       final back = PmsCheck.fromJson(c.toJson());
-      expect(back.mrc, '5921/001-23');
+      expect(back.mip, '5921/023-14');
+      expect(back.mrcCode, 'W-1');
       expect(back.periodicity, Periodicity.weekly);
       expect(back.estMinutes, 30);
       expect(back.lastDoneMs, 50 * _day);
       expect(back.lastBy, 'MM2 Smith');
+      expect(back.assignedTo, 'FN Jones');
+      expect(back.doneDays, c.doneDays);
       expect(back.workcenter, 'CP01');
       expect(back.scheduledForMs, 99 * _day);
     });
@@ -89,6 +145,15 @@ void main() {
       final back = PmsCheck.fromJson(_weekly().toJson());
       expect(back.lastDoneMs, isNull);
       expect(back.neverDone, isTrue);
+    });
+    test('reads the legacy "mrc" field as the MIP number', () {
+      final back = PmsCheck.fromJson({
+        'id': 'L1',
+        'mrc': '4421/039-01',
+        'periodicity': 'monthly',
+      });
+      expect(back.mip, '4421/039-01');
+      expect(back.seq, 1);
     });
   });
 }

@@ -32,13 +32,15 @@ bool isSameWeek(int ms, int ref) => startOfWeek(ms) == startOfWeek(ref);
 /// Outcome of an item placed on the weekly board — drives its dot color.
 enum SchedOutcome { done, missed, upcoming }
 
-/// For an item scheduled on [scheduledForMs], given when it was last done
-/// ([doneAtMs], null if never): `done` once accomplished on or after its
-/// scheduled day, `missed` if that day has passed without it, else `upcoming`.
-SchedOutcome schedOutcome(int scheduledForMs, int? doneAtMs, int nowMs) {
-  final day = startOfDay(scheduledForMs);
-  if (doneAtMs != null && doneAtMs >= day) return SchedOutcome.done;
-  if (day < startOfDay(nowMs)) return SchedOutcome.missed;
+/// Outcome of an item on day [dayMs]: `done` if it was accomplished that day,
+/// `missed` if the day has passed without it, else `upcoming`.
+SchedOutcome schedOutcome({
+  required bool done,
+  required int dayMs,
+  required int nowMs,
+}) {
+  if (done) return SchedOutcome.done;
+  if (startOfDay(dayMs) < startOfDay(nowMs)) return SchedOutcome.missed;
   return SchedOutcome.upcoming;
 }
 
