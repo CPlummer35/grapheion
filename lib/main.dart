@@ -35,6 +35,9 @@ import 'domain/sked.dart';
 import 'mesh_store.dart';
 import 'notifications.dart';
 
+/// Payload for dragging a schedulable item (a PMS check or a job) onto a day.
+typedef _SchedDrag = ({PmsCheck? check, Job? job});
+
 // POC unit credentials: every grapheion node on the same LAN/relay with this
 // app id + key forms one mesh ("the ship"). Replace the key for a real unit.
 const _kAppId = 'grapheion';
@@ -1381,17 +1384,17 @@ class _HomePageState extends State<HomePage> {
       final dj = active.where(
           (j) => j.scheduledForMs != null && isSameDay(j.scheduledForMs!, dayMs));
       return [
-        for (final c in dc) _scheduleTile(check: c),
-        for (final j in dj) _scheduleTile(job: j),
+        for (final c in dc) _draggableTile(check: c),
+        for (final j in dj) _draggableTile(job: j),
       ];
     }
 
     final poolChecks = checks.where((c) => !thisWeek(c.scheduledForMs)).toList()
       ..sort(byStatus);
     final pool = <Widget>[
-      for (final c in poolChecks) _scheduleTile(check: c),
+      for (final c in poolChecks) _draggableTile(check: c),
       for (final j in active)
-        if (!thisWeek(j.scheduledForMs)) _scheduleTile(job: j),
+        if (!thisWeek(j.scheduledForMs)) _draggableTile(job: j),
     ];
 
     return ListView(children: [
@@ -1406,10 +1409,12 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
       _scheduleGroup('Unscheduled', pool,
-          empty: 'Nothing waiting — all placed on a day.', tint: false),
+          empty: 'Nothing waiting — all placed on a day.',
+          tint: false,
+          targetDayMs: null),
       for (final d in days)
         _scheduleGroup('${weekdayLabel(d)}   ${_shortDate(d)}', forDay(d),
-            empty: '—', tint: d == today),
+            empty: '—', tint: d == today, targetDayMs: d),
     ]);
   }
 
@@ -1521,37 +1526,100 @@ class _HomePageState extends State<HomePage> {
               style: Theme.of(context).textTheme.titleMedium),
           const Spacer(),
           if (_canManageSked)
-            const Text('tap an item to assign a day',
+            const Text('drag an item onto a day (or tap)',
                 style: TextStyle(color: Colors.grey, fontSize: 11)),
         ]),
       );
 
+  /// A board section (the Unscheduled pool or one day). Doubles as a drop
+  /// target: dropping an item here assigns it to [targetDayMs] (null = pool /
+  /// unschedule). Highlights while an item is dragged over it.
   Widget _scheduleGroup(String title, List<Widget> tiles,
-      {required String empty, required bool tint}) {
+      {required String empty, required bool tint, int? targetDayMs}) {
     final scheme = Theme.of(context).colorScheme;
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Container(
-        color: tint ? scheme.primaryContainer : scheme.surfaceContainerHighest,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        child: Row(children: [
-          Text(title,
-              style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: tint ? scheme.onPrimaryContainer : null)),
-          const Spacer(),
-          if (tiles.isNotEmpty)
-            Text('${tiles.length}',
-                style: const TextStyle(color: Colors.grey, fontSize: 12)),
+    return DragTarget<_SchedDrag>(
+      onAcceptWithDetails: (d) => _scheduleItemForDay(
+          check: d.data.check, job: d.data.job, dayMs: targetDayMs),
+      builder: (ctx, candidate, rejected) {
+        final hovering = candidate.isNotEmpty;
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Container(
+            color: hovering
+                ? scheme.primary.withValues(alpha: 0.30)
+                : (tint
+                    ? scheme.primaryContainer
+                    : scheme.surfaceContainerHighest),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Row(children: [
+              Text(title,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: tint ? scheme.onPrimaryContainer : null)),
+              const Spacer(),
+              if (tiles.isNotEmpty)
+                Text('${tiles.length}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12)),
+            ]),
+          ),
+          if (tiles.isEmpty)
+            Container(
+              constraints: const BoxConstraints(minHeight: 38),
+              alignment: Alignment.centerLeft,
+              color: hovering ? scheme.primary.withValues(alpha: 0.08) : null,
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+              child: Text(empty, style: const TextStyle(color: Colors.grey)),
+            )
+          else
+            ...tiles,
+        ]);
+      },
+    );
+  }
+
+  /// Wraps a tile so a manager can drag it onto a day (click-drag on desktop,
+  /// long-press-drag on touch so it doesn't fight list scrolling).
+  Widget _draggableTile({PmsCheck? check, Job? job}) {
+    final tile = _scheduleTile(check: check, job: job);
+    if (!_canManageSked) return tile;
+    final data = (check: check, job: job);
+    final label = check != null
+        ? (check.title.isEmpty ? check.mrc : check.title)
+        : job!.title;
+    final feedback = Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: const BoxConstraints(maxWidth: 260),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: const [BoxShadow(blurRadius: 8, color: Colors.black26)],
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(check != null ? Icons.event_repeat : Icons.construction,
+              size: 16),
+          const SizedBox(width: 8),
+          Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
         ]),
       ),
-      if (tiles.isEmpty)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-          child: Text(empty, style: const TextStyle(color: Colors.grey)),
-        )
-      else
-        ...tiles,
-    ]);
+    );
+    final dragging = Opacity(opacity: 0.35, child: tile);
+    final desktop = {
+      TargetPlatform.macOS,
+      TargetPlatform.windows,
+      TargetPlatform.linux
+    }.contains(Theme.of(context).platform);
+    return desktop
+        ? Draggable<_SchedDrag>(
+            data: data,
+            feedback: feedback,
+            childWhenDragging: dragging,
+            child: tile)
+        : LongPressDraggable<_SchedDrag>(
+            data: data,
+            feedback: feedback,
+            childWhenDragging: dragging,
+            child: tile);
   }
 
   /// A schedulable item on the board. PMS checks carry their full detail
