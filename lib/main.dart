@@ -833,6 +833,48 @@ class _HomePageState extends State<HomePage> {
   bool get _canManageSked =>
       _role != null && _role != Role.technician && _role != Role.portEngineer;
 
+  /// Seed a relatable example — a bicycle (EIN BIKE-1) with a spread of PMS
+  /// checks across periodicities + statuses — at the signed-in work center.
+  /// Stable ids, so re-loading just refreshes them.
+  void _seedBicyclePms() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    const ein = 'BIKE-1';
+    const day = 86400000;
+    // id, mrc, title, periodicity, est-min, last-done-days-ago (null = never).
+    // One per periodicity (D/W/2W/M/Q/S/A), back-dated for a status spread.
+    final seeds = <(String, String, String, Periodicity, int, int?)>[
+      ('pms-bike-001', 'BIKE/001', 'Inspect tires & check pressure',
+          Periodicity.daily, 5, 0), // scheduled
+      ('pms-bike-002', 'BIKE/002', 'Clean & lubricate chain',
+          Periodicity.weekly, 10, 9), // overdue
+      ('pms-bike-003', 'BIKE/003', 'Check & torque frame bolts',
+          Periodicity.biweekly, 10, 13), // due soon
+      ('pms-bike-004', 'BIKE/004', 'Clean headset bearing',
+          Periodicity.monthly, 20, 28), // due soon
+      ('pms-bike-005', 'BIKE/005', 'True wheels & check spoke tension',
+          Periodicity.quarterly, 45, 95), // overdue
+      ('pms-bike-006', 'BIKE/006', 'Bleed brakes', Periodicity.semiannual, 40,
+          175), // due soon
+      ('pms-bike-007', 'BIKE/007', 'Full drivetrain overhaul',
+          Periodicity.annual, 120, null), // never -> scheduled
+    ];
+    for (final s in seeds) {
+      _savePmsCheck(PmsCheck(
+        id: s.$1,
+        mrc: s.$2,
+        title: s.$3,
+        ein: ein,
+        workcenter: _workcenter,
+        periodicity: s.$4,
+        estMinutes: s.$5,
+        lastDoneMs: s.$6 == null ? null : now - s.$6! * day,
+        lastBy: s.$6 == null ? '' : 'demo',
+        createdAtMs: now,
+        updatedAtMs: now,
+      ));
+    }
+  }
+
   void _saveOrgEntity(String coll, String id, String json) {
     _node!.putRaw(coll, id, json);
     _bleBroadcast(coll, id, json);
@@ -1317,13 +1359,27 @@ class _HomePageState extends State<HomePage> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Text(
-            _canManageSked
-                ? 'No PMS checks scheduled.\nTap “Add check” to start the schedule.'
-                : 'No PMS checks for your work center yet.',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.grey),
-          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+              _canManageSked
+                  ? 'No PMS checks scheduled.'
+                  : 'No PMS checks for your work center yet.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey),
+            ),
+            if (_canManageSked) ...[
+              const SizedBox(height: 8),
+              const Text('Use “Add check”, or load a relatable example:',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 12)),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _seedBicyclePms,
+                icon: const Icon(Icons.pedal_bike),
+                label: const Text('Load example: Bicycle PMS'),
+              ),
+            ],
+          ]),
         ),
       );
     }
