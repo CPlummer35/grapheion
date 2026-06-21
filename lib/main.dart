@@ -1216,8 +1216,7 @@ class _HomePageState extends State<HomePage> {
   // Feature areas, in top-bar order. Index 0 (CSMP) shows the New-job FAB.
   static const _features = <(IconData, String)>[
     (Icons.construction, 'CSMP'),
-    (Icons.event_repeat, 'SKED'),
-    (Icons.calendar_month, 'Schedule'),
+    (Icons.calendar_month, 'SKED'),
     (Icons.warning_amber, 'CASREP'),
     (Icons.groups, 'Watchbills'),
     (Icons.hub, 'Connection'),
@@ -1278,9 +1277,7 @@ class _HomePageState extends State<HomePage> {
       case 'CSMP':
         return _csmpView(mine, pending, active, completed);
       case 'SKED':
-        return _skedPage();
-      case 'Schedule':
-        return _schedulePage(active);
+        return _skedPage(active);
       case 'CASREP':
         return _casrepPage();
       case 'Connection':
@@ -1357,73 +1354,63 @@ class _HomePageState extends State<HomePage> {
     PmsStatus.scheduled: Colors.green,
   };
 
-  Widget _skedPage() {
+  /// SKED — the weekly PMS schedule. The current Mon–Sun week as a board: an
+  /// Unscheduled pool (all PMS checks not placed this week + active jobs) and a
+  /// section per day. Each item carries its full PMS detail + Accomplish.
+  Widget _skedPage(List<Job> active) {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final checks = _store.pmsChecks.values.where(_store.canSeeCheck).toList()
-      // Overdue first, then due, then scheduled; ties broken by next-due.
-      ..sort((a, b) {
-        final r = b.statusAt(now).index.compareTo(a.statusAt(now).index);
-        return r != 0 ? r : a.nextDueMs.compareTo(b.nextDueMs);
-      });
-    if (checks.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(
-              _canManageSked
-                  ? 'No PMS checks scheduled.'
-                  : 'No PMS checks for your work center yet.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.grey),
-            ),
-            if (_canManageSked) ...[
-              const SizedBox(height: 8),
-              const Text('Use “Add check”, or load a relatable example:',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey, fontSize: 12)),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: _seedBicyclePms,
-                icon: const Icon(Icons.pedal_bike),
-                label: const Text('Load example: Bicycle PMS'),
-              ),
-            ],
-          ]),
-        ),
-      );
+    final days = weekDays(now);
+    final weekStart = days.first;
+    final weekEnd = days.last + 86400000;
+    final today = startOfDay(now);
+    bool thisWeek(int? ms) => ms != null && ms >= weekStart && ms < weekEnd;
+
+    final checks = _store.pmsChecks.values.where(_store.canSeeCheck).toList();
+    // Overdue first, then due, then scheduled; ties broken by next-due.
+    int byStatus(PmsCheck a, PmsCheck b) {
+      final r = b.statusAt(now).index.compareTo(a.statusAt(now).index);
+      return r != 0 ? r : a.nextDueMs.compareTo(b.nextDueMs);
     }
-    return ListView.separated(
-      itemCount: checks.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (_, i) {
-        final c = checks[i];
-        final status = c.statusAt(now);
-        final color = _skedColors[status]!;
-        return ListTile(
-          leading: Container(
-            width: 10,
-            height: 10,
-            margin: const EdgeInsets.only(top: 6),
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+
+    List<Widget> forDay(int dayMs) {
+      final dc = checks
+          .where(
+              (c) => c.scheduledForMs != null && isSameDay(c.scheduledForMs!, dayMs))
+          .toList()
+        ..sort(byStatus);
+      final dj = active.where(
+          (j) => j.scheduledForMs != null && isSameDay(j.scheduledForMs!, dayMs));
+      return [
+        for (final c in dc) _scheduleTile(check: c),
+        for (final j in dj) _scheduleTile(job: j),
+      ];
+    }
+
+    final poolChecks = checks.where((c) => !thisWeek(c.scheduledForMs)).toList()
+      ..sort(byStatus);
+    final pool = <Widget>[
+      for (final c in poolChecks) _scheduleTile(check: c),
+      for (final j in active)
+        if (!thisWeek(j.scheduledForMs)) _scheduleTile(job: j),
+    ];
+
+    return ListView(children: [
+      _scheduleHeader(weekStart),
+      if (checks.isEmpty && _canManageSked)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: OutlinedButton.icon(
+            onPressed: _seedBicyclePms,
+            icon: const Icon(Icons.pedal_bike),
+            label: const Text('No PMS checks yet — load example: Bicycle PMS'),
           ),
-          title: Text(c.title.isEmpty ? c.mrc : c.title),
-          subtitle: Text([
-            'MRC ${c.mrc}',
-            c.periodicity.code,
-            if (c.ein.isNotEmpty) c.ein,
-            c.workcenter,
-            _dueText(c, now),
-            if (!c.neverDone) 'last: ${c.lastBy}',
-          ].join('  ·  ')),
-          isThreeLine: true,
-          trailing: FilledButton.tonal(
-            onPressed: () => _accomplishCheck(c),
-            child: const Text('Accomplish'),
-          ),
-        );
-      },
-    );
+        ),
+      _scheduleGroup('Unscheduled', pool,
+          empty: 'Nothing waiting — all placed on a day.', tint: false),
+      for (final d in days)
+        _scheduleGroup('${weekdayLabel(d)}   ${_shortDate(d)}', forDay(d),
+            empty: '—', tint: d == today),
+    ]);
   }
 
   String _dueText(PmsCheck c, int nowMs) {
@@ -1526,44 +1513,6 @@ class _HomePageState extends State<HomePage> {
 
   // --- Weekly schedule (PMS checks + active jobs assigned to days) ----------
 
-  Widget _schedulePage(List<Job> active) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final days = weekDays(now);
-    final weekStart = days.first;
-    final weekEnd = days.last + 86400000;
-    final today = startOfDay(now);
-    bool thisWeek(int? ms) => ms != null && ms >= weekStart && ms < weekEnd;
-
-    final checks = _store.pmsChecks.values.where(_store.canSeeCheck).toList();
-
-    List<Widget> forDay(int dayMs) => [
-          for (final c in checks)
-            if (c.scheduledForMs != null && isSameDay(c.scheduledForMs!, dayMs))
-              _scheduleTile(check: c),
-          for (final j in active)
-            if (j.scheduledForMs != null && isSameDay(j.scheduledForMs!, dayMs))
-              _scheduleTile(job: j),
-        ];
-
-    // Pool: what still needs placing this week — checks due within a week (or
-    // overdue) and active jobs, that aren't already on a day this week.
-    final pool = <Widget>[
-      for (final c in checks)
-        if (!thisWeek(c.scheduledForMs) && c.daysUntilDue(now) <= 7)
-          _scheduleTile(check: c),
-      for (final j in active)
-        if (!thisWeek(j.scheduledForMs)) _scheduleTile(job: j),
-    ];
-
-    return ListView(children: [
-      _scheduleHeader(weekStart),
-      _scheduleGroup('Unscheduled', pool,
-          empty: 'Nothing waiting — all placed on a day.', tint: false),
-      for (final d in days)
-        _scheduleGroup('${weekdayLabel(d)}   ${_shortDate(d)}', forDay(d),
-            empty: '—', tint: d == today),
-    ]);
-  }
 
   Widget _scheduleHeader(int weekStart) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -1605,23 +1554,48 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
+  /// A schedulable item on the board. PMS checks carry their full detail
+  /// (status dot, MRC/periodicity/EIN, due text, last-by) + an Accomplish
+  /// button; jobs show priority/EIN. Tap (managers) to assign/move the day.
   Widget _scheduleTile({PmsCheck? check, Job? job}) {
-    final isCheck = check != null;
-    final title =
-        isCheck ? (check.title.isEmpty ? check.mrc : check.title) : job!.title;
-    final sub = isCheck
-        ? 'PMS · ${check.periodicity.code}${check.ein.isEmpty ? '' : ' · ${check.ein}'}'
-        : 'Job · PRI ${job!.priority}${job.ein.isEmpty ? '' : ' · ${job.ein}'}';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (check != null) {
+      return ListTile(
+        dense: true,
+        isThreeLine: true,
+        leading: Container(
+          width: 10,
+          height: 10,
+          margin: const EdgeInsets.only(top: 6),
+          decoration: BoxDecoration(
+              color: _skedColors[check.statusAt(now)]!,
+              shape: BoxShape.circle),
+        ),
+        title: Text(check.title.isEmpty ? check.mrc : check.title),
+        subtitle: Text([
+          'MRC ${check.mrc}',
+          check.periodicity.code,
+          if (check.ein.isNotEmpty) check.ein,
+          _dueText(check, now),
+          if (!check.neverDone) 'last: ${check.lastBy}',
+        ].join('  ·  ')),
+        trailing: FilledButton.tonal(
+          onPressed: () => _accomplishCheck(check),
+          style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+          child: const Text('Done'),
+        ),
+        onTap: _canManageSked ? () => _openScheduleAssign(check: check) : null,
+      );
+    }
+    final j = job!;
     return ListTile(
       dense: true,
-      leading:
-          Icon(isCheck ? Icons.event_repeat : Icons.construction, size: 20),
-      title: Text(title),
-      subtitle: Text(sub),
+      leading: const Icon(Icons.construction, size: 20),
+      title: Text(j.title),
+      subtitle: Text(
+          'Job · PRI ${j.priority}${j.ein.isEmpty ? '' : ' · ${j.ein}'}'),
       trailing: _canManageSked ? const Icon(Icons.more_vert, size: 18) : null,
-      onTap: _canManageSked
-          ? () => _openScheduleAssign(check: check, job: job)
-          : null,
+      onTap: _canManageSked ? () => _openScheduleAssign(job: j) : null,
     );
   }
 
