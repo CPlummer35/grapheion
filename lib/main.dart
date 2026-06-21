@@ -32,6 +32,7 @@ import 'domain/job.dart';
 import 'domain/org.dart';
 import 'domain/schedule.dart';
 import 'domain/sked.dart';
+import 'domain/watch.dart';
 import 'mesh_store.dart';
 import 'notifications.dart';
 
@@ -158,6 +159,8 @@ class _HomePageState extends State<HomePage> {
   int _peers = 0;
   int _feature = 0; // selected feature (CSMP/SKED/CASREP/…)
   bool _featureOpen = false; // narrow layout: is a feature open (vs the menu)
+  int _watchDayOffset = 0; // watchbill: days from today
+  WatchPeriod _watchPeriod = WatchPeriod.forenoon; // watchbill: selected period
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
   final Map<String, TransportLink?> _transport = {};
@@ -397,6 +400,15 @@ class _HomePageState extends State<HomePage> {
           }
           for (final p in _store.pmsChecks.values) {
             _bleBroadcast(kPmsChecks, p.id, jsonEncode(p.toJson()));
+          }
+          for (final s in _store.watchStations.values) {
+            _bleBroadcast(kWatchStations, s.id, jsonEncode(s.toJson()));
+          }
+          for (final q in _store.quals.values) {
+            _bleBroadcast(kQuals, q.id, jsonEncode(q.toJson()));
+          }
+          for (final a in _store.watchbill.values) {
+            _bleBroadcast(kWatchbill, a.id, jsonEncode(a.toJson()));
           }
         }
         if (mounted) setState(() {});
@@ -754,6 +766,9 @@ class _HomePageState extends State<HomePage> {
       kAccounts,
       kCasreps,
       kPmsChecks,
+      kWatchStations,
+      kQuals,
+      kWatchbill,
     ]) {
       for (final id in node.listDocuments(coll)) {
         final raw = node.getRaw(coll, id);
@@ -793,6 +808,99 @@ class _HomePageState extends State<HomePage> {
 
   String _nextCasrepNumber() => _store.nextCasrepNumber();
   Casrep? _casrepForJob(String jobId) => _store.casrepForJob(jobId);
+
+  // --- Watchbills + PQS -----------------------------------------------------
+
+  void _saveWatchStation(WatchStation s) {
+    final json = jsonEncode(s.toJson());
+    _store.watchStations[s.id] = s;
+    _node!.putRaw(kWatchStations, s.id, json);
+    _bleBroadcast(kWatchStations, s.id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// Set a person's PQS level (and qualifier flag) for a station, and sync it.
+  void _setQual(String personId, String stationId, QualLevel level,
+      {bool? qualifier}) {
+    final id = Qual.makeId(personId, stationId);
+    final existing = _store.quals[id];
+    final q = Qual(
+      id: id,
+      personId: personId,
+      stationId: stationId,
+      level: level,
+      qualifier: qualifier ?? existing?.qualifier ?? false,
+      updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    final json = jsonEncode(q.toJson());
+    _store.quals[id] = q;
+    _node!.putRaw(kQuals, id, json);
+    _bleBroadcast(kQuals, id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// Post (or clear, if [personId] is null) a person to a watch on the bill.
+  void _setWatch(
+      int dayMs, String stationId, WatchPeriod period, String? personId) {
+    final id = WatchAssignment.makeId(dayMs, stationId, period);
+    if (personId == null) {
+      _store.watchbill.remove(id);
+      _node!.putRaw(kWatchbill, id, jsonEncode({'id': id, 'personId': ''}));
+      _bleBroadcast(kWatchbill, id, jsonEncode({'id': id, 'personId': ''}));
+    } else {
+      final a = WatchAssignment(
+        id: id,
+        dayMs: startOfDay(dayMs),
+        stationId: stationId,
+        period: period,
+        personId: personId,
+        updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+      );
+      final json = jsonEncode(a.toJson());
+      _store.watchbill[id] = a;
+      _node!.putRaw(kWatchbill, id, json);
+      _bleBroadcast(kWatchbill, id, json);
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// Seed the default in-port watch stations (stable ids; re-seed refreshes).
+  void _seedWatchStations() {
+    // abbr, name
+    const seeds = <(String, String)>[
+      ('CDO', 'Command Duty Officer'),
+      ('OOD', 'Officer of the Deck (in-port)'),
+      ('POOW', 'Petty Officer of the Watch'),
+      ('MOOW', 'Messenger of the Watch'),
+      ('S&S', 'Sounding & Security Patrol'),
+      ('SEC', 'Roving Security Patrol'),
+      ('DUTYENG', 'Duty Engineer'),
+    ];
+    for (var i = 0; i < seeds.length; i++) {
+      _saveWatchStation(WatchStation(
+        id: 'sta-${seeds[i].$1.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')}',
+        name: seeds[i].$2,
+        abbr: seeds[i].$1,
+        order: i,
+      ));
+    }
+  }
+
+  /// Work-center members as (accountId, name), for assignment + quals.
+  List<(String, String)> _watchPeople() {
+    final wc = _workcenter;
+    return (_store.accounts.values.where((a) => a.workcenterId == wc).toList()
+          ..sort((a, b) => a.name.compareTo(b.name)))
+        .map((a) => (a.id, a.name))
+        .toList();
+  }
+
+  String _personName(String id) =>
+      _store.accounts[id]?.name ?? (id.isEmpty ? '' : id);
+
+  /// Roles that build the watchbill / sign off PQS.
+  bool get _canManageWatch =>
+      _role != null && _role != Role.technician && _role != Role.portEngineer;
 
   // --- SKED (PMS) -----------------------------------------------------------
 
@@ -1286,8 +1394,7 @@ class _HomePageState extends State<HomePage> {
       case 'Connection':
         return _connectionsPage();
       case 'Watchbills':
-        return _stubPage(
-            Icons.groups, 'Watchbills', 'Watch-station rotation + assignments.');
+        return _watchPage();
       case 'Supply':
         return _stubPage(Icons.inventory_2, 'Supply',
             'Parts ordering, NSN lookup, requisition status.');
@@ -1346,6 +1453,292 @@ class _HomePageState extends State<HomePage> {
               style: const TextStyle(color: Colors.grey)),
         ]),
       ),
+    );
+  }
+
+  // --- Watchbills + PQS -----------------------------------------------------
+
+  static const _qualColors = {
+    QualLevel.qualified: Colors.green,
+    QualLevel.inProgress: Colors.orange,
+    QualLevel.notStarted: Colors.grey,
+  };
+
+  Widget _watchPage() {
+    return DefaultTabController(
+      length: 2,
+      child: Column(children: [
+        const TabBar(tabs: [Tab(text: 'BILL'), Tab(text: 'PQS')]),
+        Expanded(
+          child: TabBarView(
+            physics: const NeverScrollableScrollPhysics(),
+            children: [_watchBillView(), _pqsView()],
+          ),
+        ),
+      ]),
+    );
+  }
+
+  /// In-port watchbill for one day + watch period: a row per station with its
+  /// posted watchstander (only qualified people can be posted).
+  Widget _watchBillView() {
+    final stations = _store.watchStations.values.toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    if (stations.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('No watch stations yet.',
+                style: TextStyle(color: Colors.grey)),
+            if (_canManageWatch) ...[
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _seedWatchStations,
+                icon: const Icon(Icons.anchor),
+                label: const Text('Load default in-port stations'),
+              ),
+            ],
+          ]),
+        ),
+      );
+    }
+    final day = startOfDay(DateTime.now().millisecondsSinceEpoch) +
+        _watchDayOffset * 86400000;
+    return Column(children: [
+      // Day stepper.
+      Row(children: [
+        IconButton(
+            onPressed: () => setState(() => _watchDayOffset--),
+            icon: const Icon(Icons.chevron_left)),
+        Expanded(
+          child: Center(
+            child: Text('${weekdayLabel(day)}  ${_shortDate(day)}',
+                style: Theme.of(context).textTheme.titleMedium),
+          ),
+        ),
+        IconButton(
+            onPressed: () => setState(() => _watchDayOffset++),
+            icon: const Icon(Icons.chevron_right)),
+        if (_watchDayOffset != 0)
+          TextButton(
+              onPressed: () => setState(() => _watchDayOffset = 0),
+              child: const Text('Today')),
+      ]),
+      // Period selector.
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Wrap(
+          spacing: 6,
+          children: [
+            for (final p in WatchPeriod.values)
+              ChoiceChip(
+                label: Text(p.label),
+                selected: _watchPeriod == p,
+                onSelected: (_) => setState(() => _watchPeriod = p),
+              ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 2),
+        child: Text(_watchPeriod.range,
+            style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      ),
+      const Divider(height: 1),
+      Expanded(
+        child: ListView(children: [
+          for (final s in stations)
+            _watchBillRow(day, s, _watchPeriod),
+        ]),
+      ),
+    ]);
+  }
+
+  Widget _watchBillRow(int day, WatchStation s, WatchPeriod period) {
+    final assignee = _store.watchAssignee(day, s.id, period);
+    final unqualified =
+        assignee != null && !_store.isQualified(assignee, s.id);
+    return ListTile(
+      leading: CircleAvatar(
+          radius: 16,
+          child: Text(s.abbr.length > 4 ? s.abbr.substring(0, 4) : s.abbr,
+              style: const TextStyle(fontSize: 10))),
+      title: Text(s.name),
+      subtitle: assignee == null
+          ? const Text('— unassigned', style: TextStyle(color: Colors.grey))
+          : Text(_personName(assignee),
+              style: TextStyle(
+                  color: unqualified ? Colors.red : null,
+                  fontWeight: FontWeight.w600)),
+      trailing: _canManageWatch
+          ? const Icon(Icons.person_add_alt, size: 20)
+          : null,
+      onTap:
+          _canManageWatch ? () => _openWatchAssign(day, s, period) : null,
+    );
+  }
+
+  void _openWatchAssign(int day, WatchStation s, WatchPeriod period) {
+    final qualified = _store.qualifiedFor(s.id)
+      ..sort((a, b) => _personName(a).compareTo(_personName(b)));
+    final current = _store.watchAssignee(day, s.id, period);
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('${s.abbr} · ${period.label}  ${period.range}',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            if (qualified.isEmpty)
+              const ListTile(
+                leading: Icon(Icons.block, color: Colors.grey),
+                title: Text('No qualified watchstanders'),
+                subtitle: Text('Qualify someone for this station in PQS.'),
+              ),
+            for (final pid in qualified)
+              ListTile(
+                leading: const Icon(Icons.person),
+                title: Text(_personName(pid)),
+                trailing: current == pid
+                    ? const Icon(Icons.check, color: Colors.green)
+                    : null,
+                onTap: () {
+                  _setWatch(day, s.id, period, pid);
+                  Navigator.pop(ctx);
+                },
+              ),
+            if (current != null)
+              ListTile(
+                leading: const Icon(Icons.clear),
+                title: const Text('Unassign'),
+                onTap: () {
+                  _setWatch(day, s.id, period, null);
+                  Navigator.pop(ctx);
+                },
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  /// PQS — each work-center member's qualification level per watch station.
+  Widget _pqsView() {
+    final stations = _store.watchStations.values.toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    final people = _watchPeople();
+    if (stations.isEmpty) {
+      return const Center(
+          child: Text('Add watch stations first (BILL tab).',
+              style: TextStyle(color: Colors.grey)));
+    }
+    if (people.isEmpty) {
+      return const Center(
+          child: Text('No people in your work center yet.',
+              style: TextStyle(color: Colors.grey)));
+    }
+    return ListView(children: [
+      for (final (pid, name) in people)
+        ExpansionTile(
+          title: Text(name),
+          subtitle: Text(_qualSummary(pid, stations)),
+          children: [
+            for (final s in stations)
+              ListTile(
+                dense: true,
+                title: Text('${s.abbr} — ${s.name}'),
+                trailing: _qualChip(pid, s.id),
+                onTap: _canManageWatch ? () => _openQualSet(pid, s) : null,
+              ),
+          ],
+        ),
+    ]);
+  }
+
+  String _qualSummary(String pid, List<WatchStation> stations) {
+    var q = 0, ip = 0;
+    for (final s in stations) {
+      switch (_store.qualLevel(pid, s.id)) {
+        case QualLevel.qualified:
+          q++;
+        case QualLevel.inProgress:
+          ip++;
+        case QualLevel.notStarted:
+          break;
+      }
+    }
+    return '$q qualified · $ip in progress';
+  }
+
+  Widget _qualChip(String pid, String stationId) {
+    final level = _store.qualLevel(pid, stationId);
+    final q = _store.quals[Qual.makeId(pid, stationId)];
+    final color = _qualColors[level]!;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      if (q?.qualifier ?? false)
+        const Padding(
+          padding: EdgeInsets.only(right: 4),
+          child: Icon(Icons.star, size: 14, color: Colors.amber),
+        ),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.18),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color),
+        ),
+        child: Text(level.label,
+            style: TextStyle(
+                color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+      ),
+    ]);
+  }
+
+  void _openQualSet(String pid, WatchStation s) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+        final q = _store.quals[Qual.makeId(pid, s.id)];
+        final level = q?.level ?? QualLevel.notStarted;
+        return SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('${_personName(pid)} · ${s.abbr}',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            for (final l in QualLevel.values)
+              ListTile(
+                leading: Icon(Icons.circle, size: 14, color: _qualColors[l]),
+                title: Text(l.label),
+                trailing: level == l
+                    ? const Icon(Icons.check, color: Colors.green)
+                    : null,
+                onTap: () {
+                  _setQual(pid, s.id, l);
+                  setS(() {});
+                },
+              ),
+            const Divider(),
+            SwitchListTile(
+              secondary: const Icon(Icons.star, color: Colors.amber),
+              title: const Text('Qualifier (can sign others off)'),
+              value: q?.qualifier ?? false,
+              onChanged: level == QualLevel.qualified
+                  ? (v) {
+                      _setQual(pid, s.id, QualLevel.qualified, qualifier: v);
+                      setS(() {});
+                    }
+                  : null,
+            ),
+            const SizedBox(height: 8),
+          ]),
+        );
+      }),
     );
   }
 

@@ -15,6 +15,7 @@ import 'domain/chain.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
 import 'domain/sked.dart';
+import 'domain/watch.dart';
 
 // Synced collection names (shared with the BLE/Iroh wiring in the widget).
 const kJobs = 'jobs';
@@ -26,6 +27,9 @@ const kWcs = 'workcenters';
 const kAccounts = 'accounts';
 const kCasreps = 'casreps';
 const kPmsChecks = 'pmschecks'; // SKED / PMS checks
+const kWatchStations = 'watchstations'; // Watchbill stations
+const kQuals = 'quals'; // PQS qualifications (person x station)
+const kWatchbill = 'watchbill'; // watch assignments (day x station x period)
 
 /// A peer seen on the mesh, from its presence beat.
 class Peer {
@@ -54,6 +58,9 @@ class MeshStore {
   final Map<String, Account> accounts = {};
   final Map<String, Casrep> casreps = {};
   final Map<String, PmsCheck> pmsChecks = {};
+  final Map<String, WatchStation> watchStations = {};
+  final Map<String, Qual> quals = {}; // keyed by Qual.makeId(person, station)
+  final Map<String, WatchAssignment> watchbill = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
   final Map<String, int> lastSeenMs = {}; // local receive time per peer node id
@@ -109,9 +116,36 @@ class MeshStore {
       } else if (coll == kPmsChecks) {
         pmsChecks[docId] =
             PmsCheck.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kWatchStations) {
+        watchStations[docId] =
+            WatchStation.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kQuals) {
+        quals[docId] = Qual.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kWatchbill) {
+        watchbill[docId] =
+            WatchAssignment.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       }
     } catch (_) {}
   }
+
+  // --- Watchbill / PQS queries ---------------------------------------------
+
+  /// A person's qualification level for a station (notStarted if untracked).
+  QualLevel qualLevel(String personId, String stationId) =>
+      quals[Qual.makeId(personId, stationId)]?.level ?? QualLevel.notStarted;
+
+  bool isQualified(String personId, String stationId) =>
+      qualLevel(personId, stationId) == QualLevel.qualified;
+
+  /// Account ids qualified to stand [stationId].
+  List<String> qualifiedFor(String stationId) => quals.values
+      .where((q) => q.stationId == stationId && q.isQualified)
+      .map((q) => q.personId)
+      .toList();
+
+  /// Who is posted to [stationId]/[period] on [dayMs] (null if unassigned).
+  String? watchAssignee(int dayMs, String stationId, WatchPeriod period) =>
+      watchbill[WatchAssignment.makeId(dayMs, stationId, period)]?.personId;
 
   void applyOrg(String coll, String raw) {
     try {
@@ -268,6 +302,9 @@ class MeshStore {
     accounts.clear();
     casreps.clear();
     pmsChecks.clear();
+    watchStations.clear();
+    quals.clear();
+    watchbill.clear();
     org.departments.clear();
     org.divisions.clear();
     org.workcenters.clear();
