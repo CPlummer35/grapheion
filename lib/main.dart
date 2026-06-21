@@ -151,6 +151,7 @@ class _HomePageState extends State<HomePage> {
   String? _error;
   bool _isMeshHost = false; // minted the key -> bootstraps the first admin
   int _peers = 0;
+  int _feature = 0; // selected top-bar feature (CSMP/SKED/CASREP/…)
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
   final Map<String, TransportLink?> _transport = {};
@@ -955,99 +956,205 @@ class _HomePageState extends State<HomePage> {
 
     _peers = _node!.peerCount;
 
-    return DefaultTabController(
-      length: 5,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Grapheion'),
-          actions: [
-            if (_account?.isAdmin ?? false)
-              IconButton(
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => _AdminScreen(
-                    accounts: _accounts.values.toList()
-                      ..sort((a, b) => a.name.compareTo(b.name)),
-                    org: _org,
-                    onCreate: _createAccount,
-                    onUpdate: _updateAccount,
-                  ),
-                )),
-                icon: const Icon(Icons.manage_accounts),
-                tooltip: 'Manage accounts',
-              ),
-            themeToggleButton(context),
-            PopupMenuButton<String>(
-              tooltip: 'Account',
-              onSelected: (v) {
-                if (v == 'signout') _signOut();
-                if (v == 'reset') _confirmReset(context);
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(
-                    value: 'signout',
-                    child: ListTile(
-                        leading: Icon(Icons.logout),
-                        title: Text('Sign out / switch user'))),
-                PopupMenuItem(
-                    value: 'reset',
-                    child: ListTile(
-                        leading: Icon(Icons.restart_alt),
-                        title: Text('Reset / leave mesh'))),
-              ],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Grapheion'),
+        actions: [
+          if (_account?.isAdmin ?? false)
+            IconButton(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => _AdminScreen(
+                  accounts: _accounts.values.toList()
+                    ..sort((a, b) => a.name.compareTo(b.name)),
+                  org: _org,
+                  onCreate: _createAccount,
+                  onUpdate: _updateAccount,
+                ),
+              )),
+              icon: const Icon(Icons.manage_accounts),
+              tooltip: 'Manage accounts',
             ),
-          ],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(72),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    _Badge(_role!.tag, off: _role!.offShip),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                          '$_name · $_workcenter · sees ${scopeLabel(_role!)}',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white)),
-                    ),
-                    const Spacer(),
-                    Icon(Icons.hub,
-                        size: 16, color: Colors.white.withValues(alpha: 0.9)),
-                    const SizedBox(width: 4),
-                    Text('$_peers',
-                        style: const TextStyle(color: Colors.white)),
-                  ]),
-                  const TabBar(
-                    isScrollable: true,
-                    labelColor: Colors.white,
-                    unselectedLabelColor: Colors.white70,
-                    indicatorColor: Colors.white,
-                    tabs: [
-                      Tab(text: 'INBOX'),
-                      Tab(text: 'BOARD'),
-                      Tab(text: 'COMPLETED'),
-                      Tab(text: 'CASREP'),
-                      Tab(text: 'MESH'),
-                    ],
-                  ),
-                ],
+          themeToggleButton(context),
+          PopupMenuButton<String>(
+            tooltip: 'Account',
+            onSelected: (v) {
+              if (v == 'signout') _signOut();
+              if (v == 'reset') _confirmReset(context);
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                  value: 'signout',
+                  child: ListTile(
+                      leading: Icon(Icons.logout),
+                      title: Text('Sign out / switch user'))),
+              PopupMenuItem(
+                  value: 'reset',
+                  child: ListTile(
+                      leading: Icon(Icons.restart_alt),
+                      title: Text('Reset / leave mesh'))),
+            ],
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(34),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Row(children: [
+              _Badge(_role!.tag, off: _role!.offShip),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                    '$_name · $_workcenter · sees ${scopeLabel(_role!)}',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white)),
               ),
-            ),
+              const Spacer(),
+              Icon(Icons.hub,
+                  size: 16, color: Colors.white.withValues(alpha: 0.9)),
+              const SizedBox(width: 4),
+              Text('$_peers', style: const TextStyle(color: Colors.white)),
+            ]),
           ),
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: _openCreate,
-          icon: const Icon(Icons.add),
-          label: const Text('New job'),
+      ),
+      floatingActionButton: _feature == 0
+          ? FloatingActionButton.extended(
+              onPressed: _openCreate,
+              icon: const Icon(Icons.add),
+              label: const Text('New job'),
+            )
+          : null,
+      body: Column(children: [
+        _featureBar(),
+        const Divider(height: 1),
+        Expanded(child: _featureBody(mine, board, completed)),
+      ]),
+    );
+  }
+
+  // Feature areas, in top-bar order. Index 0 (CSMP) shows the New-job FAB.
+  static const _features = <(IconData, String)>[
+    (Icons.construction, 'CSMP'),
+    (Icons.event_repeat, 'SKED'),
+    (Icons.warning_amber, 'CASREP'),
+    (Icons.groups, 'Watchbills'),
+    (Icons.hub, 'Connection'),
+    (Icons.inventory_2, 'Supply'),
+    (Icons.school, 'Training'),
+    (Icons.how_to_reg, 'Muster'),
+  ];
+
+  /// Top feature bar: tappable buttons that wrap (no horizontal scrolling).
+  Widget _featureBar() {
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        child: Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (var i = 0; i < _features.length; i++)
+              _featureChip(i, _features[i].$1, _features[i].$2),
+          ],
         ),
-        body: TabBarView(children: [
-          _jobList(mine, emptyText: 'No jobs awaiting your action.'),
-          _jobList(board, emptyText: 'No active jobs. Originate one.'),
-          _jobList(completed, emptyText: 'No closed jobs yet.'),
-          _casrepPage(),
-          _connectionsPage(),
+      ),
+    );
+  }
+
+  Widget _featureChip(int idx, IconData icon, String label) {
+    final selected = _feature == idx;
+    final scheme = Theme.of(context).colorScheme;
+    final fg = selected ? scheme.onPrimary : scheme.onSurfaceVariant;
+    return InkWell(
+      onTap: () => setState(() => _feature = idx),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? scheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: selected ? scheme.primary : scheme.outlineVariant),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 16, color: fg),
+          const SizedBox(width: 6),
+          Text(label,
+              style: TextStyle(
+                  color: fg,
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _featureBody(List<Job> mine, List<Job> board, List<Job> completed) {
+    switch (_feature) {
+      case 0:
+        return _csmpView(mine, board, completed);
+      case 2:
+        return _casrepPage();
+      case 4:
+        return _connectionsPage();
+      case 1:
+        return _stubPage(Icons.event_repeat, 'SKED',
+            'Planned Maintenance System scheduling.');
+      case 3:
+        return _stubPage(
+            Icons.groups, 'Watchbills', 'Watch-station rotation + assignments.');
+      case 5:
+        return _stubPage(Icons.inventory_2, 'Supply',
+            'Parts ordering, NSN lookup, requisition status.');
+      case 6:
+        return _stubPage(
+            Icons.school, 'Training', 'Qualifications + PQS tracking.');
+      default:
+        return _stubPage(
+            Icons.how_to_reg, 'Muster', 'Personnel accountability + muster.');
+    }
+  }
+
+  /// CSMP: the corrective-maintenance views (INBOX / BOARD / COMPLETED), as
+  /// tap-only sub-tabs (no horizontal swipe).
+  Widget _csmpView(List<Job> mine, List<Job> board, List<Job> completed) {
+    return DefaultTabController(
+      length: 3,
+      child: Column(children: [
+        const TabBar(
+          tabs: [
+            Tab(text: 'INBOX'),
+            Tab(text: 'BOARD'),
+            Tab(text: 'COMPLETED'),
+          ],
+        ),
+        Expanded(
+          child: TabBarView(
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              _jobList(mine, emptyText: 'No jobs awaiting your action.'),
+              _jobList(board, emptyText: 'No active jobs. Originate one.'),
+              _jobList(completed, emptyText: 'No closed jobs yet.'),
+            ],
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _stubPage(IconData icon, String title, String blurb) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 56, color: Colors.grey),
+          const SizedBox(height: 16),
+          Text(title, style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 8),
+          Text('$blurb\n\nComing soon.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey)),
         ]),
       ),
     );
