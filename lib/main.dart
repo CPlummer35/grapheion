@@ -30,19 +30,13 @@ import 'domain/casrep.dart';
 import 'domain/chain.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
+import 'mesh_store.dart';
 import 'notifications.dart';
 
 // POC unit credentials: every grapheion node on the same LAN/relay with this
 // app id + key forms one mesh ("the ship"). Replace the key for a real unit.
 const _kAppId = 'grapheion';
-const _kJobs = 'jobs';
-const _kLog = 'joblog';
-const _kPresence = 'presence';
-const _kDepts = 'departments'; // managed org chart (synced like jobs)
-const _kDivs = 'divisions';
-const _kWcs = 'workcenters';
-const _kAccounts = 'accounts'; // synced personnel directory (PIN-protected)
-const _kCasreps = 'casreps'; // CASREP reports (DIVO-generated, mesh-synced)
+// Synced collection names + the Peer model live in mesh_store.dart (kJobs, …).
 
 /// A peer is "online" if we've heard a presence beat from it within this window.
 const _kOnlineWindowMs = 30 * 1000;
@@ -136,28 +130,29 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   PeatFlutterNode? _node;
-  // Identity is the signed-in account; _name/_role/_workcenter mirror it so the
-  // rest of the app keeps working unchanged.
-  Account? _account;
-  String _name = '';
-  Role? _role;
-  String _workcenter = 'CP01';
+  // Synced domain state + the apply/query/notify logic live in the (testable,
+  // node-free) MeshStore; the widget owns the node, BLE, onboarding and UI and
+  // reads the store through these thin getters so the rest of the code is
+  // unchanged.
+  late final MeshStore _store = MeshStore(onNotify: _notify);
+  Account? get _account => _store.account;
+  String get _name => _store.name;
+  Role? get _role => _store.role;
+  String get _workcenter => _store.workcenter;
+  Map<String, Account> get _accounts => _store.accounts;
+  Map<String, Job> get _jobs => _store.jobs;
+  Map<String, Casrep> get _casreps => _store.casreps;
+  OrgChart get _org => _store.org;
+  Map<String, List<JobEvent>> get _events => _store.events;
+  Map<String, Peer> get _presence => _store.presence;
+  Map<String, int> get _lastSeenMs => _store.lastSeenMs;
+  String? get _pendingAccountId => _store.pendingAccountId;
+
   String? _error;
-
-  final Map<String, Account> _accounts = {}; // synced personnel directory
   bool _isMeshHost = false; // minted the key -> bootstraps the first admin
-  String? _pendingAccountId; // last signed-in account, restored once it syncs
-
-  final Map<String, Job> _jobs = {};
-  final Map<String, Casrep> _casreps = {};
-  final OrgChart _org = OrgChart(); // synced org chart; drives role visibility
-  final Map<String, List<JobEvent>> _events = {};
   int _peers = 0;
 
-  // Mesh presence: who else is on the net, how they're reachable, and when we
-  // last heard from them.
-  final Map<String, _Peer> _presence = {};
-  final Map<String, int> _lastSeenMs = {}; // local receive time per peer node id
+  // Mesh presence transports (node-derived; the peer set itself is in the store).
   final Map<String, TransportLink?> _transport = {};
   Timer? _presenceTimer;
   Timer? _tickTimer;
@@ -200,7 +195,7 @@ class _HomePageState extends State<HomePage> {
     _isMeshHost = (p.getBool('isMeshHost') ?? false) ||
         (p.getString('role') == 'divo' && _formationKey != null);
     if (_isMeshHost) await p.setBool('isMeshHost', true);
-    _pendingAccountId = p.getString('accountId');
+    _store.pendingAccountId = p.getString('accountId');
     if (_formationKey != null) {
       await _startNode(); // node runs; _restoreAccount() fires after load
     } else {
@@ -218,13 +213,10 @@ class _HomePageState extends State<HomePage> {
     await _startNode(); // seeds the org chart, then -> bootstrap sign-in
   }
 
-  /// Adopt [a] as the signed-in identity and mirror it into _name/_role/_wc.
+  /// Adopt [a] as the signed-in identity (role/name/work center derive from it).
   void _setAccount(Account a) {
-    _account = a;
-    _name = a.name;
-    _role = a.role;
-    _workcenter = a.workcenterId;
-    _pendingAccountId = a.id;
+    _store.account = a;
+    _store.pendingAccountId = a.id;
     SharedPreferences.getInstance().then((p) => p.setString('accountId', a.id));
     _publishPresence();
     if (mounted) setState(() {});
@@ -261,8 +253,8 @@ class _HomePageState extends State<HomePage> {
     );
     _accounts[id] = a;
     final json = jsonEncode(a.toJson());
-    _node!.putRaw(_kAccounts, id, json);
-    _bleBroadcast(_kAccounts, id, json);
+    _node!.putRaw(kAccounts, id, json);
+    _bleBroadcast(kAccounts, id, json);
     if (mounted) setState(() {});
     return a;
   }
@@ -272,13 +264,11 @@ class _HomePageState extends State<HomePage> {
   void _updateAccount(Account a) {
     _accounts[a.id] = a;
     final json = jsonEncode(a.toJson());
-    _node!.putRaw(_kAccounts, a.id, json);
-    _bleBroadcast(_kAccounts, a.id, json);
+    _node!.putRaw(kAccounts, a.id, json);
+    _bleBroadcast(kAccounts, a.id, json);
     // If we edited our own account, mirror the change into the live identity.
     if (_account?.id == a.id) {
-      _role = a.role;
-      _workcenter = a.workcenterId;
-      _name = a.name;
+      _store.account = a;
     }
     if (mounted) setState(() {});
   }
@@ -288,10 +278,8 @@ class _HomePageState extends State<HomePage> {
     final p = await SharedPreferences.getInstance();
     await p.remove('accountId');
     setState(() {
-      _account = null;
-      _pendingAccountId = null;
-      _role = null;
-      _name = '';
+      _store.account = null;
+      _store.pendingAccountId = null;
     });
   }
 
@@ -337,21 +325,8 @@ class _HomePageState extends State<HomePage> {
     } catch (_) {}
     _formationKey = null;
     _isMeshHost = false;
-    _account = null;
-    _pendingAccountId = null;
-    _role = null;
-    _name = '';
-    _workcenter = 'CP01';
-    _accounts.clear();
-    _jobs.clear();
-    _casreps.clear();
-    _events.clear();
-    _presence.clear();
-    _lastSeenMs.clear();
+    _store.clear(); // jobs/events/accounts/casreps/org/presence + identity
     _transport.clear();
-    _org.departments.clear();
-    _org.divisions.clear();
-    _org.workcenters.clear();
     _reasm.clear();
     _reasmTs.clear();
     if (mounted) setState(() {});
@@ -375,6 +350,7 @@ class _HomePageState extends State<HomePage> {
         ),
       ));
       node.startSync();
+      _store.myNodeId = node.nodeId; // so the store skips our own presence beats
       node.subscribeChanges().listen(_onChange);
       _loadExisting(node);
       setState(() => _node = node);
@@ -394,23 +370,23 @@ class _HomePageState extends State<HomePage> {
         // jobs so a handheld that just came into range converges.
         if (_bleRunning && (_gossipTick++).isEven) {
           for (final job in _jobs.values) {
-            _bleBroadcast(_kJobs, job.id, jsonEncode(job.toJson()));
+            _bleBroadcast(kJobs, job.id, jsonEncode(job.toJson()));
           }
           // Re-broadcast the small org chart so late BLE joiners converge.
           for (final d in _org.departments.values) {
-            _bleBroadcast(_kDepts, d.id, jsonEncode(d.toJson()));
+            _bleBroadcast(kDepts, d.id, jsonEncode(d.toJson()));
           }
           for (final v in _org.divisions.values) {
-            _bleBroadcast(_kDivs, v.id, jsonEncode(v.toJson()));
+            _bleBroadcast(kDivs, v.id, jsonEncode(v.toJson()));
           }
           for (final w in _org.workcenters.values) {
-            _bleBroadcast(_kWcs, w.id, jsonEncode(w.toJson()));
+            _bleBroadcast(kWcs, w.id, jsonEncode(w.toJson()));
           }
           for (final a in _accounts.values) {
-            _bleBroadcast(_kAccounts, a.id, jsonEncode(a.toJson()));
+            _bleBroadcast(kAccounts, a.id, jsonEncode(a.toJson()));
           }
           for (final c in _casreps.values) {
-            _bleBroadcast(_kCasreps, c.id, jsonEncode(c.toJson()));
+            _bleBroadcast(kCasreps, c.id, jsonEncode(c.toJson()));
           }
         }
         if (mounted) setState(() {});
@@ -438,8 +414,8 @@ class _HomePageState extends State<HomePage> {
       'workcenter': _workcenter,
       'hb': DateTime.now().millisecondsSinceEpoch,
     });
-    node.putRaw(_kPresence, node.nodeId, json);
-    _bleBroadcast(_kPresence, node.nodeId, json);
+    node.putRaw(kPresence, node.nodeId, json);
+    _bleBroadcast(kPresence, node.nodeId, json);
   }
 
   void _refreshTransports() {
@@ -596,10 +572,10 @@ class _HomePageState extends State<HomePage> {
       final m = jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
       final id = m['i'] as String;
       final docRaw = m['d'] as String;
-      _applyDoc(coll, id, docRaw, remote: true, peer: null);
+      _store.applyDoc(coll, id, docRaw, remote: true, peer: null);
       _node?.putRaw(coll, id, docRaw); // persist + re-bridge over Iroh
       // Visibility for BLE testing — a grapheion doc just crossed over Bluetooth.
-      if (coll == _kJobs || coll == _kLog) debugPrint('[BLE-RX] $coll · $id');
+      if (coll == kJobs || coll == kLog) debugPrint('[BLE-RX] $coll · $id');
       if (mounted) setState(() {});
     } catch (_) {}
   }
@@ -757,93 +733,27 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// Cold-load whatever's already in the node's store into the [MeshStore].
   void _loadExisting(PeatFlutterNode node) {
-    for (final id in node.listDocuments(_kJobs)) {
-      final raw = node.getRaw(_kJobs, id);
-      if (raw != null) {
-        try {
-          _jobs[id] = Job.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        } catch (_) {}
+    for (final coll in const [
+      kJobs,
+      kLog,
+      kDepts,
+      kDivs,
+      kWcs,
+      kAccounts,
+      kCasreps,
+    ]) {
+      for (final id in node.listDocuments(coll)) {
+        final raw = node.getRaw(coll, id);
+        if (raw != null) _store.applyDoc(coll, id, raw, remote: false);
       }
     }
-    for (final id in node.listDocuments(_kLog)) {
-      final raw = node.getRaw(_kLog, id);
-      if (raw != null) {
-        try {
-          _ingestEvent(JobEvent.fromJson(jsonDecode(raw) as Map<String, dynamic>));
-        } catch (_) {}
-      }
+    // Cold-loaded presence seeds last-seen from the peer's own heartbeat.
+    for (final id in node.listDocuments(kPresence)) {
+      final raw = node.getRaw(kPresence, id);
+      if (raw != null) _store.ingestPresence(raw, fromHeartbeat: true);
     }
-    for (final id in node.listDocuments(_kPresence)) {
-      final raw = node.getRaw(_kPresence, id);
-      if (raw != null) _ingestPresence(node, raw, fromHeartbeat: true);
-    }
-    for (final id in node.listDocuments(_kDepts)) {
-      final raw = node.getRaw(_kDepts, id);
-      if (raw != null) _applyOrg(_kDepts, raw);
-    }
-    for (final id in node.listDocuments(_kDivs)) {
-      final raw = node.getRaw(_kDivs, id);
-      if (raw != null) _applyOrg(_kDivs, raw);
-    }
-    for (final id in node.listDocuments(_kWcs)) {
-      final raw = node.getRaw(_kWcs, id);
-      if (raw != null) _applyOrg(_kWcs, raw);
-    }
-    for (final id in node.listDocuments(_kAccounts)) {
-      final raw = node.getRaw(_kAccounts, id);
-      if (raw != null) {
-        try {
-          _accounts[id] =
-              Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        } catch (_) {}
-      }
-    }
-    for (final id in node.listDocuments(_kCasreps)) {
-      final raw = node.getRaw(_kCasreps, id);
-      if (raw != null) {
-        try {
-          _casreps[id] =
-              Casrep.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        } catch (_) {}
-      }
-    }
-  }
-
-  /// Fold one org-chart entity into the in-memory [_org].
-  void _applyOrg(String coll, String raw) {
-    try {
-      final m = jsonDecode(raw) as Map<String, dynamic>;
-      if (coll == _kDepts) {
-        final d = Department.fromJson(m);
-        _org.departments[d.id] = d;
-      } else if (coll == _kDivs) {
-        final v = Division.fromJson(m);
-        _org.divisions[v.id] = v;
-      } else if (coll == _kWcs) {
-        final w = WorkCenter.fromJson(m);
-        _org.workcenters[w.id] = w;
-      }
-    } catch (_) {}
-  }
-
-  void _ingestPresence(PeatFlutterNode node, String raw, {bool fromHeartbeat = false}) {
-    try {
-      final m = jsonDecode(raw) as Map<String, dynamic>;
-      final nid = m['nodeId'] as String;
-      if (nid == node.nodeId) return; // skip ourselves
-      _presence[nid] = _Peer(
-        nodeId: nid,
-        name: (m['name'] ?? '') as String,
-        role: roleFromToken((m['role'] ?? 'technician') as String),
-        workcenter: (m['workcenter'] ?? '') as String,
-      );
-      // Live beats use local receive time (skew-proof); a cold-loaded doc seeds
-      // from the peer's own heartbeat until a live beat refreshes it.
-      _lastSeenMs[nid] = fromHeartbeat
-          ? (m['hb'] ?? 0) as int
-          : DateTime.now().millisecondsSinceEpoch;
-    } catch (_) {}
   }
 
   void _onChange(DocumentChange change) {
@@ -851,87 +761,27 @@ class _HomePageState extends State<HomePage> {
     if (node == null) return;
     final raw = node.getRaw(change.collection, change.docId);
     if (raw == null) return;
-    _applyDoc(change.collection, change.docId, raw,
+    _store.applyDoc(change.collection, change.docId, raw,
         remote: change.origin.isRemote, peer: change.origin.peerId);
     if (mounted) setState(() {});
-  }
-
-  /// Apply an incoming document — from Iroh (subscribeChanges) OR a BLE frame —
-  /// to the in-memory model, notifying on remote changes.
-  void _applyDoc(String coll, String docId, String raw,
-      {required bool remote, String? peer}) {
-    try {
-      if (coll == _kJobs) {
-        final job = Job.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        final old = _jobs[job.id];
-        _jobs[job.id] = job;
-        if (remote) _notifyForChange(old, job, peer);
-      } else if (coll == _kLog) {
-        _ingestEvent(JobEvent.fromJson(jsonDecode(raw) as Map<String, dynamic>));
-      } else if (coll == _kPresence) {
-        _ingestPresence(_node!, raw); // live beat -> local receive time
-      } else if (coll == _kDepts || coll == _kDivs || coll == _kWcs) {
-        _applyOrg(coll, raw);
-      } else if (coll == _kAccounts) {
-        final acct = Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        _accounts[acct.id] = acct;
-        if (_account?.id == acct.id) {
-          // Our own account was edited remotely (e.g. an admin reassigned our
-          // role / work center) — adopt it live so it takes effect without a
-          // re-sign-in. (Re-applied; the CASREP merge reverted this fix.)
-          _account = acct;
-          _role = acct.role;
-          _workcenter = acct.workcenterId;
-          _name = acct.name;
-        } else {
-          _restoreAccount(); // our account may have just arrived (first sign-in)
-        }
-      } else if (coll == _kCasreps) {
-        _casreps[docId] =
-            Casrep.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-      }
-    } catch (_) {}
-  }
-
-  void _ingestEvent(JobEvent ev) {
-    final list = _events.putIfAbsent(ev.jobId, () => []);
-    if (list.any((e) => e.docId == ev.docId)) return;
-    list.add(ev);
-    list.sort((a, b) => a.tsMs.compareTo(b.tsMs));
   }
 
   // --- Writes (sync over the mesh) -----------------------------------------
 
   void _saveJob(Job job) {
     final json = jsonEncode(job.toJson());
-    _node!.putRaw(_kJobs, job.id, json);
-    _bleBroadcast(_kJobs, job.id, json);
+    _node!.putRaw(kJobs, job.id, json);
+    _bleBroadcast(kJobs, job.id, json);
   }
 
   void _saveCasrep(Casrep c) {
     final json = jsonEncode(c.toJson());
-    _node!.putRaw(_kCasreps, c.id, json);
-    _bleBroadcast(_kCasreps, c.id, json);
+    _node!.putRaw(kCasreps, c.id, json);
+    _bleBroadcast(kCasreps, c.id, json);
   }
 
-  /// Next sequential CASREP number for this mesh (zero-padded to 3 digits).
-  String _nextCasrepNumber() {
-    final n = _casreps.length + 1;
-    return n.toString().padLeft(3, '0');
-  }
-
-  /// True if any CASREP already covers this job.
-  bool _hasCasrep(String jobId) =>
-      _casreps.values.any((c) => c.jobId == jobId && c.type != CasrepType.cancel);
-
-  Casrep? _casrepForJob(String jobId) {
-    try {
-      return _casreps.values
-          .firstWhere((c) => c.jobId == jobId && c.type != CasrepType.cancel);
-    } catch (_) {
-      return null;
-    }
-  }
+  String _nextCasrepNumber() => _store.nextCasrepNumber();
+  Casrep? _casrepForJob(String jobId) => _store.casrepForJob(jobId);
 
   void _saveOrgEntity(String coll, String id, String json) {
     _node!.putRaw(coll, id, json);
@@ -946,15 +796,15 @@ class _HomePageState extends State<HomePage> {
     final seed = seedOrgChart();
     for (final d in seed.departments.values) {
       _org.departments[d.id] = d;
-      _saveOrgEntity(_kDepts, d.id, jsonEncode(d.toJson()));
+      _saveOrgEntity(kDepts, d.id, jsonEncode(d.toJson()));
     }
     for (final v in seed.divisions.values) {
       _org.divisions[v.id] = v;
-      _saveOrgEntity(_kDivs, v.id, jsonEncode(v.toJson()));
+      _saveOrgEntity(kDivs, v.id, jsonEncode(v.toJson()));
     }
     for (final w in seed.workcenters.values) {
       _org.workcenters[w.id] = w;
-      _saveOrgEntity(_kWcs, w.id, jsonEncode(w.toJson()));
+      _saveOrgEntity(kWcs, w.id, jsonEncode(w.toJson()));
     }
   }
 
@@ -969,10 +819,10 @@ class _HomePageState extends State<HomePage> {
       comment: comment,
       tsMs: now,
     );
-    _ingestEvent(ev);
+    _store.ingestEvent(ev);
     final json = jsonEncode(ev.toJson());
-    _node!.putRaw(_kLog, ev.docId, json);
-    _bleBroadcast(_kLog, ev.docId, json);
+    _node!.putRaw(kLog, ev.docId, json);
+    _bleBroadcast(kLog, ev.docId, json);
   }
 
   void _createJob({
@@ -1060,88 +910,14 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
-  /// Whether this job is currently waiting on MY action (for the Inbox).
-  bool _needsMyAction(Job j) {
-    switch (j.phase) {
-      case JobPhase.approval:
-      case JobPhase.closeout:
-        return j.approver == _role;
-      case JobPhase.ta:
-        return _role == Role.portEngineer;
-      case JobPhase.execution:
-        return _role == Role.technician;
-      case JobPhase.closed:
-        return false;
-    }
-  }
-
-  // --- Notifications --------------------------------------------------------
+  // Queries delegate to the store (single source of truth; the store's
+  // notification policy fires _notify via its onNotify callback).
+  bool _needsMyAction(Job j) => _store.needsMyAction(j);
+  bool _canSee(Job j) => _store.canSee(j);
 
   void _notify(String title, String preview, String? peer) =>
       PeatNotifications.instance
           .showRemoteChange(collection: title, preview: preview, peerId: peer);
-
-  /// The next approver gets a "your turn" ping; the originator hears that their
-  /// job advanced, was returned, or was closed.
-  void _notifyForChange(Job? old, Job job, String? peer) {
-    final title = job.title.isEmpty ? 'a job' : job.title;
-    // DIVO: a CASREP-eligible job (priority 1–3) with no CASREP yet — prompt to
-    // write one. Fires on origination or when the priority changes into range.
-    if (_role == Role.divo &&
-        casrepEligible(job.priority) &&
-        !job.isClosed &&
-        !_hasCasrep(job.id) &&
-        (old == null || old.priority != job.priority)) {
-      _notify(title,
-          'priority ${job.priority} — write a CASREP (${casrepCategoryLabel(job.priority)})',
-          peer);
-      return;
-    }
-    final mineNow = _needsMyAction(job);
-    final mineBefore = old != null && _needsMyAction(old);
-    if (mineNow && !mineBefore) {
-      _notify(title, 'awaiting your ${_role!.tag} action', peer);
-      return;
-    }
-    if (old != null && job.originator == _name) {
-      if (job.returned && !old.returned) {
-        _notify(title, 'returned for rework', peer);
-      } else if (job.phase == JobPhase.closed && old.phase != JobPhase.closed) {
-        _notify(title, 'closed out', peer);
-      } else if (job.phase != old.phase || job.approver != old.approver) {
-        _notify(title, 'approved → ${_stageText(job)}', peer);
-      }
-    }
-  }
-
-  String _stageText(Job j) {
-    switch (j.phase) {
-      case JobPhase.approval:
-        return j.approver.tag;
-      case JobPhase.ta:
-        return 'off-ship (PE)';
-      case JobPhase.execution:
-        return j.inWork ? 'in work' : 'approved';
-      case JobPhase.closeout:
-        return 'closing (${j.approver.tag})';
-      case JobPhase.closed:
-        return 'closed';
-    }
-  }
-
-  /// Non-DIVO with no formation key: must scan the DIVO's QR to enter the mesh.
-  /// Whether the signed-in role may see [j] under the org-scoped rules. Until
-  /// the org chart has synced (empty), don't filter — fall back to see-all.
-  bool _canSee(Job j) {
-    if (_org.workcenters.isEmpty) return true;
-    return canSeeJob(
-      role: _role!,
-      viewerWorkcenterId: _workcenter,
-      jobWorkcenterId: j.workcenter,
-      jobHasTa: j.taRequested,
-      org: _org,
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -2560,18 +2336,7 @@ class _AccountFormState extends State<_AccountForm> {
 // --- Models / small widgets -------------------------------------------------
 
 /// A peer seen on the mesh, from its presence beat.
-class _Peer {
-  _Peer({
-    required this.nodeId,
-    required this.name,
-    required this.role,
-    required this.workcenter,
-  });
-  final String nodeId;
-  final String name;
-  final Role role;
-  final String workcenter;
-}
+// Peer model lives in mesh_store.dart.
 
 class _Badge extends StatelessWidget {
   const _Badge(this.text, {this.off = false, this.color});
