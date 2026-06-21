@@ -20,8 +20,8 @@ compartment with no network still converge.
   **feature menu** that opens each feature **full-screen** (back returns to the
   menu). Content switches on tap — no horizontal swiping.
 - **Features**: **CSMP** (corrective), **SKED** (preventive + schedule),
-  **CASREP**, **Connection** (the mesh), plus "coming soon" stubs for
-  **Watchbills, Supply, Training, Muster**.
+  **CASREP**, **Watchbills** (watch organization + PQS), **Connection** (the
+  mesh), plus "coming soon" stubs for **Supply, Training, Muster**.
 
 ### Roles & visibility
 - Each device logs in as one role: Technician, Work Center Supervisor (WCS),
@@ -68,6 +68,23 @@ compartment with no network still converge.
   aligned); high-priority jobs prompt the DIVO to originate one. The classified
   DIVO → DH → XO → CO release chain is intentionally **deferred** for now.
 
+### Watchbills & PQS (qualification tree)
+- **PQS and the watchbill are one system**: PQS says who's *qualified*; the
+  watchbill *assigns* qualified people — and **won't let you post someone who
+  isn't qualified** for the station. That constraint is the point.
+- **Qualification tree** — one model spans **watch stations** (POOW, OOD…),
+  **knowledge** quals (3M, Damage Control…), **letters** (CDO, EOOW, TAO), and
+  capstone **designations** (**SWO**). A designation sits atop a **prerequisite
+  tree**; the PQS view shows a person's live progress (e.g. SWO `5/7 prereqs ·
+  ready to board`) across stages *not started → in progress → board pending →
+  qualified*, with a **qualifier** flag for sign-off authority. (Notably, **3M
+  is a SWO prerequisite** — the maintenance side feeds the pin.)
+- **In-port watchbill** — pick a day + watch period (Mid…Evening, incl. dog
+  watches); a row per station shows who's posted, drawing only from PQS-qualified
+  people. A one-tap seed loads the default in-port stations + the SWO quals.
+- *Scaffolded, awaiting fidelity:* PQS **line-items** (100/200/300), **duty-
+  section** rotation, and the **underway** bill are the next depth passes.
+
 ### Mesh / Connection
 - **QR-gated join** — the DIVO hosts the mesh: it mints a formation key carried
   in a join QR. Everyone else scans that QR once to join (key + host remembered,
@@ -88,8 +105,8 @@ Grapheion is a Flutter app that depends on the `peat_flutter` package (the mesh
 binding over the `peat-ffi` native library). It does not run its own server —
 the device mesh *is* the backend. Everything syncs as peat documents: **jobs**,
 the **audit log**, **accounts**, the **org chart** (departments / divisions /
-work centers), **CASREPs**, **PMS checks**, and **presence** — over **two
-transports in parallel**:
+work centers), **CASREPs**, **PMS checks**, **qualifications + PQS progress**,
+the **watchbill**, and **presence** — over **two transports in parallel**:
 
 - **Iroh/QUIC** — Wi-Fi/mDNS on the LAN, plus the n0 relay for the off-ship Port
   Engineer. Key-gated by peat's formation handshake.
@@ -190,9 +207,10 @@ appears on the other over Bluetooth.
 
 Proof-of-concept, running on **macOS, iOS, and Android**. Working: the full
 corrective-maintenance (CSMP) job lifecycle, preventive PMS (SKED) with the
-drag-and-drop weekly schedule, CASREP-from-priority, org-scoped visibility,
+drag-and-drop weekly schedule, CASREP-from-priority, the in-port watchbill +
+PQS qualification tree (incl. SWO prerequisites), org-scoped visibility,
 QR-gated join, role switching, notifications, a dual Iroh + BLE transport (BLE
-AES-256-GCM encrypted, both transports formation-key gated), and a ~75-test
+AES-256-GCM encrypted, both transports formation-key gated), and an ~84-test
 host-run regression suite.
 
 Not done / not for operational use:
@@ -202,7 +220,9 @@ Not done / not for operational use:
   cooperative).
 - **PMS spot-check / verification sign-off** isn't built — accomplishment is a
   single action today (no WCS spot-check loop yet).
-- **Watchbills, Supply, Training, Muster** are navigation stubs ("coming soon").
+- **PQS line-items (100/200/300), duty-section rotation, and the underway bill**
+  are scaffolded but not yet built (awaiting the real SWO PQS structure).
+- **Supply, Training, Muster** are navigation stubs ("coming soon").
 - The CASREP **release chain** (DIVO → DH → XO → CO) is deferred (it crosses into
   classified territory); CASREP is wired to jobs only for now.
 - The off-ship Port Engineer is reached over the **relay**, but the QR join
