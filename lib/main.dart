@@ -1124,7 +1124,7 @@ class _HomePageState extends State<HomePage> {
         const TabBar(
           tabs: [
             Tab(text: 'INBOX'),
-            Tab(text: 'BOARD'),
+            Tab(text: 'PENDING'),
             Tab(text: 'COMPLETED'),
           ],
         ),
