@@ -30,6 +30,7 @@ import 'domain/casrep.dart';
 import 'domain/chain.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
+import 'domain/schedule.dart';
 import 'domain/sked.dart';
 import 'mesh_store.dart';
 import 'notifications.dart';
@@ -1135,15 +1136,20 @@ class _HomePageState extends State<HomePage> {
   /// The action button for the current feature (CSMP → new job, SKED → add
   /// check), or none.
   Widget? _featureFab() {
-    if (_feature == 0) return _newJobFab();
-    if (_feature == 1 && _canManageSked) {
-      return FloatingActionButton.extended(
-        onPressed: _openAddCheck,
-        icon: const Icon(Icons.add),
-        label: const Text('Add check'),
-      );
+    switch (_features[_feature].$2) {
+      case 'CSMP':
+        return _newJobFab();
+      case 'SKED':
+        return _canManageSked
+            ? FloatingActionButton.extended(
+                onPressed: _openAddCheck,
+                icon: const Icon(Icons.add),
+                label: const Text('Add check'),
+              )
+            : null;
+      default:
+        return null;
     }
-    return null;
   }
 
   /// Wide layout: the vertical feature rail + content side by side.
@@ -1211,6 +1217,7 @@ class _HomePageState extends State<HomePage> {
   static const _features = <(IconData, String)>[
     (Icons.construction, 'CSMP'),
     (Icons.event_repeat, 'SKED'),
+    (Icons.calendar_month, 'Schedule'),
     (Icons.warning_amber, 'CASREP'),
     (Icons.groups, 'Watchbills'),
     (Icons.hub, 'Connection'),
@@ -1266,22 +1273,25 @@ class _HomePageState extends State<HomePage> {
 
   Widget _featureBody(List<Job> mine, List<Job> pending, List<Job> active,
       List<Job> completed) {
-    switch (_feature) {
-      case 0:
+    // Dispatch on the feature label so the order of _features can change freely.
+    switch (_features[_feature].$2) {
+      case 'CSMP':
         return _csmpView(mine, pending, active, completed);
-      case 2:
-        return _casrepPage();
-      case 4:
-        return _connectionsPage();
-      case 1:
+      case 'SKED':
         return _skedPage();
-      case 3:
+      case 'Schedule':
+        return _schedulePage(active);
+      case 'CASREP':
+        return _casrepPage();
+      case 'Connection':
+        return _connectionsPage();
+      case 'Watchbills':
         return _stubPage(
             Icons.groups, 'Watchbills', 'Watch-station rotation + assignments.');
-      case 5:
+      case 'Supply':
         return _stubPage(Icons.inventory_2, 'Supply',
             'Parts ordering, NSN lookup, requisition status.');
-      case 6:
+      case 'Training':
         return _stubPage(
             Icons.school, 'Training', 'Qualifications + PQS tracking.');
       default:
@@ -1512,6 +1522,168 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
     );
+  }
+
+  // --- Weekly schedule (PMS checks + active jobs assigned to days) ----------
+
+  Widget _schedulePage(List<Job> active) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final days = weekDays(now);
+    final weekStart = days.first;
+    final weekEnd = days.last + 86400000;
+    final today = startOfDay(now);
+    bool thisWeek(int? ms) => ms != null && ms >= weekStart && ms < weekEnd;
+
+    final checks = _store.pmsChecks.values.where(_store.canSeeCheck).toList();
+
+    List<Widget> forDay(int dayMs) => [
+          for (final c in checks)
+            if (c.scheduledForMs != null && isSameDay(c.scheduledForMs!, dayMs))
+              _scheduleTile(check: c),
+          for (final j in active)
+            if (j.scheduledForMs != null && isSameDay(j.scheduledForMs!, dayMs))
+              _scheduleTile(job: j),
+        ];
+
+    // Pool: what still needs placing this week — checks due within a week (or
+    // overdue) and active jobs, that aren't already on a day this week.
+    final pool = <Widget>[
+      for (final c in checks)
+        if (!thisWeek(c.scheduledForMs) && c.daysUntilDue(now) <= 7)
+          _scheduleTile(check: c),
+      for (final j in active)
+        if (!thisWeek(j.scheduledForMs)) _scheduleTile(job: j),
+    ];
+
+    return ListView(children: [
+      _scheduleHeader(weekStart),
+      _scheduleGroup('Unscheduled', pool,
+          empty: 'Nothing waiting — all placed on a day.', tint: false),
+      for (final d in days)
+        _scheduleGroup('${weekdayLabel(d)}   ${_shortDate(d)}', forDay(d),
+            empty: '—', tint: d == today),
+    ]);
+  }
+
+  Widget _scheduleHeader(int weekStart) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+        child: Row(children: [
+          Text('Week of ${_shortDate(weekStart)}',
+              style: Theme.of(context).textTheme.titleMedium),
+          const Spacer(),
+          if (_canManageSked)
+            const Text('tap an item to assign a day',
+                style: TextStyle(color: Colors.grey, fontSize: 11)),
+        ]),
+      );
+
+  Widget _scheduleGroup(String title, List<Widget> tiles,
+      {required String empty, required bool tint}) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        color: tint ? scheme.primaryContainer : scheme.surfaceContainerHighest,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Row(children: [
+          Text(title,
+              style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: tint ? scheme.onPrimaryContainer : null)),
+          const Spacer(),
+          if (tiles.isNotEmpty)
+            Text('${tiles.length}',
+                style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        ]),
+      ),
+      if (tiles.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+          child: Text(empty, style: const TextStyle(color: Colors.grey)),
+        )
+      else
+        ...tiles,
+    ]);
+  }
+
+  Widget _scheduleTile({PmsCheck? check, Job? job}) {
+    final isCheck = check != null;
+    final title =
+        isCheck ? (check.title.isEmpty ? check.mrc : check.title) : job!.title;
+    final sub = isCheck
+        ? 'PMS · ${check.periodicity.code}${check.ein.isEmpty ? '' : ' · ${check.ein}'}'
+        : 'Job · PRI ${job!.priority}${job.ein.isEmpty ? '' : ' · ${job.ein}'}';
+    return ListTile(
+      dense: true,
+      leading:
+          Icon(isCheck ? Icons.event_repeat : Icons.construction, size: 20),
+      title: Text(title),
+      subtitle: Text(sub),
+      trailing: _canManageSked ? const Icon(Icons.more_vert, size: 18) : null,
+      onTap: _canManageSked
+          ? () => _openScheduleAssign(check: check, job: job)
+          : null,
+    );
+  }
+
+  String _shortDate(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${d.month}/${d.day}';
+  }
+
+  void _openScheduleAssign({PmsCheck? check, Job? job}) {
+    final days = weekDays(DateTime.now().millisecondsSinceEpoch);
+    final current = check?.scheduledForMs ?? job?.scheduledForMs;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              check != null
+                  ? (check.title.isEmpty ? check.mrc : check.title)
+                  : job!.title,
+              style: Theme.of(ctx).textTheme.titleMedium,
+            ),
+          ),
+          for (final d in days)
+            ListTile(
+              leading: const Icon(Icons.today),
+              title: Text('${weekdayLabel(d)}   ${_shortDate(d)}'),
+              trailing: (current != null && isSameDay(current, d))
+                  ? const Icon(Icons.check, color: Colors.green)
+                  : null,
+              onTap: () {
+                _scheduleItemForDay(check: check, job: job, dayMs: d);
+                Navigator.pop(ctx);
+              },
+            ),
+          if (current != null)
+            ListTile(
+              leading: const Icon(Icons.clear),
+              title: const Text('Unschedule'),
+              onTap: () {
+                _scheduleItemForDay(check: check, job: job, dayMs: null);
+                Navigator.pop(ctx);
+              },
+            ),
+        ]),
+      ),
+    );
+  }
+
+  void _scheduleItemForDay({PmsCheck? check, Job? job, int? dayMs}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (check != null) {
+      check.scheduledForMs = dayMs;
+      check.updatedAtMs = now;
+      _savePmsCheck(check);
+    } else if (job != null) {
+      job.scheduledForMs = dayMs;
+      job.updatedAtMs = now;
+      _saveJob(job);
+    }
+    if (mounted) setState(() {});
   }
 
   Widget _jobList(List<Job> jobs, {required String emptyText}) {

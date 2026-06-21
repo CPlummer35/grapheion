@@ -31,6 +31,7 @@ class Job {
   bool returned; // last approval/close-out step was a kick-back
   bool inWork; // execution phase: work has started
   bool taRequested; // a TA was raised at some point (history flag)
+  int? scheduledForMs; // WCS-assigned day on the weekly schedule (null = none)
   final int createdAtMs;
   int updatedAtMs;
 
@@ -47,6 +48,7 @@ class Job {
     required this.returned,
     required this.inWork,
     required this.taRequested,
+    this.scheduledForMs,
     required this.createdAtMs,
     required this.updatedAtMs,
   });
@@ -178,6 +180,7 @@ class Job {
         'returned': returned,
         'inWork': inWork,
         'taRequested': taRequested,
+        'scheduledForMs': scheduledForMs,
         'createdAtMs': createdAtMs,
         'updatedAtMs': updatedAtMs,
       };
@@ -195,6 +198,7 @@ class Job {
         returned: (j['returned'] ?? false) as bool,
         inWork: (j['inWork'] ?? false) as bool,
         taRequested: (j['taRequested'] ?? false) as bool,
+        scheduledForMs: j['scheduledForMs'] as int?,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );

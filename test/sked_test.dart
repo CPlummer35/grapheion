@@ -73,7 +73,9 @@ void main() {
 
   group('round-trip', () {
     test('serializes and parses back identically', () {
-      final c = _weekly(created: 1000)..accomplish('MM2 Smith', 50 * _day);
+      final c = _weekly(created: 1000)
+        ..accomplish('MM2 Smith', 50 * _day)
+        ..scheduledForMs = 99 * _day;
       final back = PmsCheck.fromJson(c.toJson());
       expect(back.mrc, '5921/001-23');
       expect(back.periodicity, Periodicity.weekly);
@@ -81,6 +83,7 @@ void main() {
       expect(back.lastDoneMs, 50 * _day);
       expect(back.lastBy, 'MM2 Smith');
       expect(back.workcenter, 'CP01');
+      expect(back.scheduledForMs, 99 * _day);
     });
     test('a never-done check round-trips with a null lastDone', () {
       final back = PmsCheck.fromJson(_weekly().toJson());

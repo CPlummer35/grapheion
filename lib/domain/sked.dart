@@ -98,6 +98,7 @@ class PmsCheck {
   int estMinutes; // estimated man-minutes to perform
   int? lastDoneMs; // last accomplishment (null = never done)
   String lastBy; // who last accomplished it ('' if never)
+  int? scheduledForMs; // WCS-assigned day on the weekly schedule (null = none)
   final int createdAtMs;
   int updatedAtMs;
 
@@ -111,6 +112,7 @@ class PmsCheck {
     required this.estMinutes,
     required this.lastDoneMs,
     required this.lastBy,
+    this.scheduledForMs,
     required this.createdAtMs,
     required this.updatedAtMs,
   });
@@ -175,6 +177,7 @@ class PmsCheck {
         'estMinutes': estMinutes,
         'lastDoneMs': lastDoneMs,
         'lastBy': lastBy,
+        'scheduledForMs': scheduledForMs,
         'createdAtMs': createdAtMs,
         'updatedAtMs': updatedAtMs,
       };
@@ -189,6 +192,7 @@ class PmsCheck {
         estMinutes: (j['estMinutes'] ?? 0) as int,
         lastDoneMs: j['lastDoneMs'] as int?,
         lastBy: (j['lastBy'] ?? '') as String,
+        scheduledForMs: j['scheduledForMs'] as int?,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );
