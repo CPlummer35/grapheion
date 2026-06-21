@@ -1418,6 +1418,21 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
+  /// Board dot color. A check placed on a day is green once done, red if its
+  /// day passed without it, orange while still upcoming. Unscheduled checks use
+  /// the PMS due-status color (overdue/due/scheduled).
+  Color _checkDot(PmsCheck c, int nowMs) {
+    if (c.scheduledForMs == null) return _skedColors[c.statusAt(nowMs)]!;
+    switch (schedOutcome(c.scheduledForMs!, c.lastDoneMs, nowMs)) {
+      case SchedOutcome.done:
+        return Colors.green;
+      case SchedOutcome.missed:
+        return Colors.red;
+      case SchedOutcome.upcoming:
+        return Colors.orange;
+    }
+  }
+
   String _dueText(PmsCheck c, int nowMs) {
     final d = c.daysUntilDue(nowMs);
     switch (c.statusAt(nowMs)) {
@@ -1636,8 +1651,7 @@ class _HomePageState extends State<HomePage> {
           height: 10,
           margin: const EdgeInsets.only(top: 6),
           decoration: BoxDecoration(
-              color: _skedColors[check.statusAt(now)]!,
-              shape: BoxShape.circle),
+              color: _checkDot(check, now), shape: BoxShape.circle),
         ),
         title: Text(check.title.isEmpty ? check.mrc : check.title),
         subtitle: Text([

@@ -43,4 +43,27 @@ void main() {
     expect(isSameWeek(monday, mid), isTrue);
     expect(isSameWeek(monday, nextWeek), isFalse);
   });
+
+  group('schedOutcome (board dot)', () {
+    final now = DateTime(2026, 6, 17, 12).millisecondsSinceEpoch; // Wed noon
+    final today = startOfDay(now);
+    final pastDay = today - 2 * 86400000;
+    final futureDay = today + 2 * 86400000;
+
+    test('past day, not done -> missed', () {
+      expect(schedOutcome(pastDay, null, now), SchedOutcome.missed);
+    });
+    test('past day, done before its day -> still missed', () {
+      expect(schedOutcome(pastDay, pastDay - 86400000, now),
+          SchedOutcome.missed);
+    });
+    test('done on/after its scheduled day -> done', () {
+      expect(schedOutcome(pastDay, now, now), SchedOutcome.done);
+      expect(schedOutcome(pastDay, pastDay, now), SchedOutcome.done);
+    });
+    test('today or future, not done -> upcoming', () {
+      expect(schedOutcome(today, null, now), SchedOutcome.upcoming);
+      expect(schedOutcome(futureDay, null, now), SchedOutcome.upcoming);
+    });
+  });
 }

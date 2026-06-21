@@ -29,6 +29,19 @@ bool isSameDay(int a, int b) => startOfDay(a) == startOfDay(b);
 /// Whether [ms] falls in the same Mon..Sun week as [ref].
 bool isSameWeek(int ms, int ref) => startOfWeek(ms) == startOfWeek(ref);
 
+/// Outcome of an item placed on the weekly board — drives its dot color.
+enum SchedOutcome { done, missed, upcoming }
+
+/// For an item scheduled on [scheduledForMs], given when it was last done
+/// ([doneAtMs], null if never): `done` once accomplished on or after its
+/// scheduled day, `missed` if that day has passed without it, else `upcoming`.
+SchedOutcome schedOutcome(int scheduledForMs, int? doneAtMs, int nowMs) {
+  final day = startOfDay(scheduledForMs);
+  if (doneAtMs != null && doneAtMs >= day) return SchedOutcome.done;
+  if (day < startOfDay(nowMs)) return SchedOutcome.missed;
+  return SchedOutcome.upcoming;
+}
+
 const weekdayShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /// Short weekday label (Mon..Sun) for a day-start timestamp.
