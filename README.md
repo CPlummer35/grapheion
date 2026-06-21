@@ -1,7 +1,8 @@
 # Grapheion
 
-**Mesh-synced corrective-maintenance approval chain — a proof-of-concept aiming
-to replace the Navy's OMMS-NG + SKED (3-M) deckplate experience.**
+**Mesh-synced 3-M maintenance — corrective (CSMP), preventive (SKED/PMS), and the
+weekly schedule — a proof-of-concept aiming to replace the Navy's OMMS-NG + SKED
+deckplate experience.**
 
 Grapheion is built on [peat](https://github.com/defenseunicorns/peat)'s
 offline-first mesh: maintenance jobs and their full chain-of-custody sync
@@ -13,31 +14,69 @@ compartment with no network still converge.
 
 ## What it does today
 
-- **Roles** — each device logs in as one role: Technician, Work Center
-  Supervisor (WCS), Leading Petty Officer (LPO), Division Officer (DIVO),
-  3-M Coordinator, Chief Engineer, or (off-ship) Port Engineer. A logout / role
-  switch is in the app bar.
-- **Job approval chain** — a technician originates a job; it climbs the on-ship
-  ladder **WCS → LPO → DIVO** (Approve advances, Return kicks it back with a
-  comment).
-- **TA (Technical Assistance)** — only the **DIVO** can "Request off-ship
-  assistance," which connects the **Port Engineer**; the PE engages or declines.
+### Navigation & layout
+- **Responsive** — on wide screens (macOS / tablet) a **vertical feature rail**
+  down the left edge with the content beside it; on phones (iOS / Android) a
+  **feature menu** that opens each feature **full-screen** (back returns to the
+  menu). Content switches on tap — no horizontal swiping.
+- **Features**: **CSMP** (corrective), **SKED** (preventive + schedule),
+  **CASREP**, **Connection** (the mesh), plus "coming soon" stubs for
+  **Watchbills, Supply, Training, Muster**.
+
+### Roles & visibility
+- Each device logs in as one role: Technician, Work Center Supervisor (WCS),
+  Leading Petty Officer (LPO), Division Officer (DIVO), 3-M Coordinator,
+  **Department Head (DH — universal for CHENG / WEPS / OPS / CSO / SUPPO)**, or
+  (off-ship) Port Engineer. Logout / role switch is in the app bar.
+- **Org-scoped visibility** — Tech & WCS see their **work center**, LPO & DIVO
+  their **division**, DH their **department**, the 3-M Coordinator the whole
+  **ship**, and the Port Engineer only **TA'd** jobs.
+
+### CSMP — corrective maintenance (the job approval chain)
+- A technician originates a job; it climbs the on-ship ladder **WCS → LPO →
+  DIVO** (Approve advances, Return kicks it back with a comment).
+- **TA (Technical Assistance)** — only the **DIVO** can request off-ship
+  assistance, which connects the **Port Engineer**; the PE engages or declines.
   This is the only way the PE enters a job.
-- **Execution + close-out** — after DIVO approval the work center starts work and
+- **Execution + close-out** — after DIVO approval the work center works it and
   marks it complete, then it climbs the close-out ladder **WCS → LPO → DIVO**
-  before it's **Closed**. Closed jobs move to the **Completed** tab.
+  before it's **Closed**.
+- Four sub-tabs: **INBOX** (your action) · **PENDING** (in routing) · **ACTIVE**
+  (approved / in work) · **COMPLETED**.
 - **Chain of custody** — every action is recorded in an append-only audit log on
-  each job.
-- **Notifications** — the next approver gets a "your turn" alert; the originator
-  hears when their job is approved, returned, or closed.
-- **Mesh tab** — shows every other node, how it's connected (Wi-Fi/relay/BLE),
-  and whether it's online (presence in the last 30s) or how long since last seen.
+  each job, and the next approver gets a "your turn" notification.
+
+### SKED — preventive maintenance (PMS) + the weekly schedule
+- **PMS checks (MRCs)** under a **MIP** (Maintenance Index Page): each carries a
+  MIP number, an **MRC code** (periodicity + sequence, e.g. `M-1`), equipment
+  EIN, and estimated minutes — matching the real 3-M MIP→MRC numbering.
+- **Periodicities** — D / W / 2W / M / Q / S / A, plus **R (situational, "as
+  required")**. Calendar checks derive **scheduled / due / overdue** from their
+  periodicity + last-done, so the schedule never goes stale.
+- **Weekly board** — the current **Mon–Sun** week. Drag (click-drag on desktop,
+  long-press-drag on touch) or tap to place **PMS checks and active jobs** onto
+  specific days; an **Unscheduled** pool holds what's not yet placed.
+- **Daily checks appear on every day** and are signed off **per day** — the dot
+  reads 🟢 done · 🔴 missed · 🟠 upcoming for each day independently.
+- **Accomplish** records who and when; **the WCS assigns** a work-center member
+  to each task.
+- A one-tap **Bicycle PMS example** seeds a relatable, self-demonstrating
+  schedule (one MRC per periodicity + a situational one).
+
+### CASREP
+- A **CASREP**'s category is derived from job priority (pri 1 → CAT 4, severity-
+  aligned); high-priority jobs prompt the DIVO to originate one. The classified
+  DIVO → DH → XO → CO release chain is intentionally **deferred** for now.
+
+### Mesh / Connection
 - **QR-gated join** — the DIVO hosts the mesh: it mints a formation key carried
-  in a join QR. Everyone else scans that QR once to join (the key + the host are
-  remembered, so it's a one-time join). No key = no mesh.
+  in a join QR. Everyone else scans that QR once to join (key + host remembered,
+  so it's a one-time join). No key = no mesh.
+- **Connection tab** — shows every other node, how it's connected
+  (Wi-Fi / relay / BLE), and whether it's online (presence in the last 30s) or
+  how long since last seen.
 - **Dual transport** — syncs over Iroh/QUIC (Wi-Fi/mDNS + relay) **and Bluetooth
-  LE** in parallel, so handhelds in a space with no Wi-Fi still converge over
-  BLE. The Mesh tab shows which transport each peer is on.
+  LE** in parallel, so handhelds in a space with no Wi-Fi still converge over BLE.
 - **Mesh security** — the formation key gates membership on *both* transports.
   Over Iroh it's peat's formation handshake; over BLE every frame is sealed with
   **AES-256-GCM** under that key (encrypted **and** authenticated), so only
@@ -47,8 +86,10 @@ compartment with no network still converge.
 
 Grapheion is a Flutter app that depends on the `peat_flutter` package (the mesh
 binding over the `peat-ffi` native library). It does not run its own server —
-the device mesh *is* the backend. Jobs, the audit log, and presence sync as peat
-documents over **two transports in parallel**:
+the device mesh *is* the backend. Everything syncs as peat documents: **jobs**,
+the **audit log**, **accounts**, the **org chart** (departments / divisions /
+work centers), **CASREPs**, **PMS checks**, and **presence** — over **two
+transports in parallel**:
 
 - **Iroh/QUIC** — Wi-Fi/mDNS on the LAN, plus the n0 relay for the off-ship Port
   Engineer. Key-gated by peat's formation handshake.
@@ -59,6 +100,14 @@ documents over **two transports in parallel**:
 Because every change is a CRDT document, the two transports converge harmlessly
 — a job edited over BLE and the same job synced over Wi-Fi merge to the same
 state.
+
+Synced state and the inbound-apply / visibility / notification logic live in a
+pure, node-free **`MeshStore`** (`lib/mesh_store.dart`); the widget reads it
+through thin getters and delegates to it. That keeps the logic unit-testable: a
+host-run **`flutter test`** suite (~75 tests, sub-second — job lifecycle,
+role-scoped visibility, CASREP categories, the PMS periodicity/MIP-MRC/schedule
+model, serialization, and a UI smoke test) is the regression net. Run it before
+changes.
 
 Repo layout this project expects (siblings under one parent):
 
@@ -107,39 +156,55 @@ code/
 
 4. **Use it.** On first launch, sign in with a name, work center (default
    `CP01`), and a role:
-   - Log in as **DIVO** on one instance → open the **MESH** tab → it shows the
-     **join QR**.
-   - Log in as another role on a second instance/device → **MESH** tab →
+   - Log in as **DIVO** on one instance → open the **Connection** feature → it
+     shows the **join QR**.
+   - Log in as another role on a second instance/device → **Connection** →
      **Scan join QR** → point at the DIVO's QR to join the mesh.
-   - Originate a job as a technician and walk it up the chain (use the logout
-     icon to switch roles on one machine).
+   - Originate a job as a technician in **CSMP** and walk it up the chain (use the
+     logout icon to switch roles on one machine). Try **SKED → Load example:
+     Bicycle PMS**, then drag a check onto a day.
 
 > Tip: to drive the whole flow on a single Mac, run a second instance in another
 > terminal with `flutter run -d macos` and log it in as a different role, or use
 > the in-app role switch.
 
-## Running on a phone (iOS)
+## Running on a phone (iOS & Android)
 
-The app runs on iPhone too (BLE is supported on iOS + macOS). Build the iOS
-framework with `bash ios/build-rust.sh` from `peat-flutter`, then
-`flutter run -d <device>`. **Deploy over a USB cable** — wireless `flutter run`
-is unreliable at the launch step.
+The app also runs on **iPhone** and **Android** — on phones the UI switches to
+the full-screen feature-menu layout automatically.
 
-To test **Bluetooth-only** sync: join both devices (scan the DIVO's QR), turn
-**Wi-Fi off on both**, keep them in BLE range, and a job created on one appears
-on the other over Bluetooth.
+- **iOS** — build the iOS framework with `bash ios/build-rust.sh` from
+  `peat-flutter`, then `flutter run -d <device>`. BLE is supported on iOS.
+- **Android** — build the Android libraries with `bash android/build-rust.sh`
+  from `peat-flutter`, then `flutter run -d <device>`. Android meshes over
+  **Iroh/Wi-Fi + relay** (the BLE bridge is iOS/macOS only). Cable-free deploys
+  work over **wireless adb**: `adb tcpip 5555 && adb connect <phone-ip>:5555`,
+  then `flutter run -d <phone-ip>:5555`. (If the debug session drops at attach,
+  the APK still installs and the app runs standalone.)
+
+To test **Bluetooth-only** sync (iOS/macOS): join both devices (scan the DIVO's
+QR), turn **Wi-Fi off on both**, keep them in BLE range, and a job created on one
+appears on the other over Bluetooth.
 
 ## Status
 
-Proof-of-concept. Working: the full job lifecycle, QR-gated join, role
-switching, notifications, and a dual Iroh + BLE transport (BLE AES-256-GCM
-encrypted, both transports formation-key gated).
+Proof-of-concept, running on **macOS, iOS, and Android**. Working: the full
+corrective-maintenance (CSMP) job lifecycle, preventive PMS (SKED) with the
+drag-and-drop weekly schedule, CASREP-from-priority, org-scoped visibility,
+QR-gated join, role switching, notifications, a dual Iroh + BLE transport (BLE
+AES-256-GCM encrypted, both transports formation-key gated), and a ~75-test
+host-run regression suite.
 
 Not done / not for operational use:
 
 - **Role authority is modeled but not enforced** — the audit log records who did
   what, but the UI doesn't yet prevent the wrong role from acting (gating is
   cooperative).
+- **PMS spot-check / verification sign-off** isn't built — accomplishment is a
+  single action today (no WCS spot-check loop yet).
+- **Watchbills, Supply, Training, Muster** are navigation stubs ("coming soon").
+- The CASREP **release chain** (DIVO → DH → XO → CO) is deferred (it crosses into
+  classified territory); CASREP is wired to jobs only for now.
 - The off-ship Port Engineer is reached over the **relay**, but the QR join
   itself is same-LAN today (cross-network PE onboarding is a follow-up).
 - BLE confidentiality is in place; broader hardening (RMF/ATO posture, key
