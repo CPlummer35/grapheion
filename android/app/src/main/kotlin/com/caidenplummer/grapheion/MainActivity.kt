@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import com.defenseunicorns.peat.PeatJni
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -25,6 +26,8 @@ class MainActivity : FlutterActivity() {
 
     // BLE transport bridge: pipes peat-ffi mesh frames over peat-btle.
     private var bleBridge: BleBridge? = null
+    // Inbound CRDT-over-BLE frames are pushed to Dart over this sink (peat/ble_rx).
+    private var bleRxSink: EventChannel.EventSink? = null
 
     // Wi-Fi Direct (P2P) link: forms an infra-free LAN.
     private var wifiDirect: WifiDirectManager? = null
@@ -94,6 +97,9 @@ class MainActivity : FlutterActivity() {
                     // exists (checked at call time, so order of start vs.
                     // startWifiDirect doesn't matter).
                     bridge.outboundForward = { t, c, b -> wifiDirectBridge?.send(t, c, b) }
+                    // Forward inbound CRDT-over-BLE frames up to Dart (peat/ble_rx),
+                    // marshalled onto the UI thread for the EventSink.
+                    bridge.inboundSink = { bytes -> runOnUiThread { bleRxSink?.success(bytes) } }
                     val ok = bridge.start()
                     // Node (re)start: re-point the Wi-Fi Direct tunnel at the
                     // new node too (the TCP link, like BLE, stays up across it).
@@ -152,6 +158,18 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // Inbound CRDT-over-BLE frames -> Dart (mirrors iOS/macOS peat/ble_rx).
+        EventChannel(messenger, "peat/ble_rx").setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, sink: EventChannel.EventSink?) {
+                    bleRxSink = sink
+                }
+                override fun onCancel(args: Any?) {
+                    bleRxSink = null
+                }
+            }
+        )
 
         MethodChannel(messenger, WIFI_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {

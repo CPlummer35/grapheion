@@ -61,6 +61,11 @@ class BleBridge(private val context: Context) : PeatMeshListener {
     // subscribeOutboundFramesJni listener lives here, so we forward each frame
     // to this sink too — same frame over both radios, idempotent on the peer.
     @Volatile var outboundForward: ((String, String, ByteArray) -> Unit)? = null
+    // grapheion's CRDT-over-BLE docs are Dart-managed (AES-GCM, not peat-ffi's
+    // crdt_kv), so inbound CRDT (transport=2) frames are forwarded here — to the
+    // peat/ble_rx EventChannel — instead of being ingested natively. Set by
+    // MainActivity; the closure marshals onto the UI thread.
+    @Volatile var inboundSink: ((ByteArray) -> Unit)? = null
     // Distinct BLE peers currently connected (deduped; onPeerConnected can fire
     // twice for the central+peripheral roles). Surfaced to the Flutter UI so the
     // BLE link is visible even though the app's iroh peer-count stays 0.
@@ -274,11 +279,17 @@ class BleBridge(private val context: Context) : PeatMeshListener {
         val frame = data.copyOfRange(3 + collLen, data.size)
         try {
             if (transport == TRANSPORT_CRDT) {
-                // Automerge CRDT doc (hex), fragmented: reassemble then merge by
-                // collection ("supply" -> counter, else -> generic KV).
-                // Idempotent/commutative. No lite-bridge.
-                val full = reassembleCrdt(collection, frame) ?: return
-                PeatJni.ingestCrdtFrameJni(handle, collection, full)
+                // grapheion's CRDT docs are Dart-managed (AES-GCM, not peat-ffi
+                // crdt_kv): forward the whole 0xAF envelope to Dart, which
+                // reassembles + decrypts + applies (mirror of the iOS rxSink).
+                // Falls back to native crdt_kv ingest only if no Dart sink wired.
+                val sink = inboundSink
+                if (sink != null) {
+                    sink(data)
+                } else {
+                    val full = reassembleCrdt(collection, frame) ?: return
+                    PeatJni.ingestCrdtFrameJni(handle, collection, full)
+                }
             } else if (transport == TRANSPORT_LITE) {
                 val id = PeatJni.ingestInboundLiteFrameJni(handle, collection, frame)
                 if (Log.isLoggable(TAG, Log.DEBUG))

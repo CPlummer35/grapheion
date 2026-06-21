@@ -494,13 +494,34 @@ class _HomePageState extends State<HomePage> {
   void _startBle() {
     final node = _node;
     if (node == null || _bleRunning) return;
-    if (!(Platform.isIOS || Platform.isMacOS)) return; // native bridge is Apple
+    // Native BLE bridge exists on iOS/macOS (CoreBluetooth) and Android (Kotlin).
+    if (!(Platform.isIOS || Platform.isMacOS || Platform.isAndroid)) return;
     try {
+      // iOS/macOS take {nodeId, callsign}; Android ignores them (it reads the
+      // node from the global handle).
       final bleNodeId = int.parse(node.nodeId.substring(0, 8), radix: 16);
-      _bleChannel.invokeMethod('startBle', {
+      final args = {
         'nodeId': bleNodeId,
         'callsign': _name.isEmpty ? 'grapheion' : _name,
-      }).catchError((_) => null);
+      };
+      if (Platform.isAndroid) {
+        // Android rejects startBle until the BLE runtime permissions are
+        // granted — retry until it succeeds, then subscribe + mark running.
+        _bleChannel.invokeMethod('startBle', args).then((ok) {
+          if (ok == true) {
+            _bleRxSub =
+                _bleRxChannel.receiveBroadcastStream().listen(_onBleFrame);
+            _bleRunning = true;
+            debugPrint('[BLE] android radio started — listening for frames');
+          } else if (mounted) {
+            Future.delayed(const Duration(seconds: 3), _startBle);
+          }
+        }).catchError((_) {
+          if (mounted) Future.delayed(const Duration(seconds: 3), _startBle);
+        });
+        return;
+      }
+      _bleChannel.invokeMethod('startBle', args).catchError((_) => null);
       _bleRxSub = _bleRxChannel.receiveBroadcastStream().listen(_onBleFrame);
       _bleRunning = true;
       debugPrint('[BLE] radio started — listening for frames');
@@ -542,7 +563,13 @@ class _HomePageState extends State<HomePage> {
       env[h + 4] = idx;
       env[h + 5] = fragCount;
       env.setRange(h + _kBleHdr, env.length, payload.sublist(start, end));
-      _bleChannel.invokeMethod('bleTx', env).catchError((_) => null);
+      // Android's bridge takes the bytes in a map under 'crdtTx'; Apple takes
+      // the raw envelope on 'bleTx'.
+      if (Platform.isAndroid) {
+        _bleChannel.invokeMethod('crdtTx', {'bytes': env}).catchError((_) => null);
+      } else {
+        _bleChannel.invokeMethod('bleTx', env).catchError((_) => null);
+      }
     }
   }
 
