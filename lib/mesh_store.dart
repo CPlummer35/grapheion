@@ -27,8 +27,8 @@ const kWcs = 'workcenters';
 const kAccounts = 'accounts';
 const kCasreps = 'casreps';
 const kPmsChecks = 'pmschecks'; // SKED / PMS checks
-const kWatchStations = 'watchstations'; // Watchbill stations
-const kQuals = 'quals'; // PQS qualifications (person x station)
+const kQualifications = 'qualifications'; // qual tree nodes (watch/knowledge/…)
+const kQuals = 'quals'; // PQS progress (person x qualification)
 const kWatchbill = 'watchbill'; // watch assignments (day x station x period)
 
 /// A peer seen on the mesh, from its presence beat.
@@ -58,8 +58,8 @@ class MeshStore {
   final Map<String, Account> accounts = {};
   final Map<String, Casrep> casreps = {};
   final Map<String, PmsCheck> pmsChecks = {};
-  final Map<String, WatchStation> watchStations = {};
-  final Map<String, Qual> quals = {}; // keyed by Qual.makeId(person, station)
+  final Map<String, Qualification> qualifications = {};
+  final Map<String, PersonQual> quals = {}; // keyed by PersonQual.makeId
   final Map<String, WatchAssignment> watchbill = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
@@ -116,11 +116,12 @@ class MeshStore {
       } else if (coll == kPmsChecks) {
         pmsChecks[docId] =
             PmsCheck.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-      } else if (coll == kWatchStations) {
-        watchStations[docId] =
-            WatchStation.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kQualifications) {
+        qualifications[docId] =
+            Qualification.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       } else if (coll == kQuals) {
-        quals[docId] = Qual.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        quals[docId] =
+            PersonQual.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       } else if (coll == kWatchbill) {
         watchbill[docId] =
             WatchAssignment.fromJson(jsonDecode(raw) as Map<String, dynamic>);
@@ -130,22 +131,28 @@ class MeshStore {
 
   // --- Watchbill / PQS queries ---------------------------------------------
 
-  /// A person's qualification level for a station (notStarted if untracked).
-  QualLevel qualLevel(String personId, String stationId) =>
-      quals[Qual.makeId(personId, stationId)]?.level ?? QualLevel.notStarted;
+  /// A person's stage on a qualification (notStarted if untracked).
+  QualStage qualStage(String personId, String qualId) =>
+      quals[PersonQual.makeId(personId, qualId)]?.stage ?? QualStage.notStarted;
 
-  bool isQualified(String personId, String stationId) =>
-      qualLevel(personId, stationId) == QualLevel.qualified;
+  bool isQualified(String personId, String qualId) =>
+      qualStage(personId, qualId) == QualStage.qualified;
 
-  /// Account ids qualified to stand [stationId].
-  List<String> qualifiedFor(String stationId) => quals.values
-      .where((q) => q.stationId == stationId && q.isQualified)
+  /// Account ids qualified for [qualId].
+  List<String> qualifiedFor(String qualId) => quals.values
+      .where((q) => q.qualId == qualId && q.isQualified)
       .map((q) => q.personId)
       .toList();
 
-  /// Who is posted to [stationId]/[period] on [dayMs] (null if unassigned).
-  String? watchAssignee(int dayMs, String stationId, WatchPeriod period) =>
-      watchbill[WatchAssignment.makeId(dayMs, stationId, period)]?.personId;
+  /// The qualification ids a person is fully qualified for (drives the tree).
+  Set<String> qualifiedIdsFor(String personId) => quals.values
+      .where((q) => q.personId == personId && q.isQualified)
+      .map((q) => q.qualId)
+      .toSet();
+
+  /// Who is posted to [qualId]/[period] on [dayMs] (null if unassigned).
+  String? watchAssignee(int dayMs, String qualId, WatchPeriod period) =>
+      watchbill[WatchAssignment.makeId(dayMs, qualId, period)]?.personId;
 
   void applyOrg(String coll, String raw) {
     try {
@@ -302,7 +309,7 @@ class MeshStore {
     accounts.clear();
     casreps.clear();
     pmsChecks.clear();
-    watchStations.clear();
+    qualifications.clear();
     quals.clear();
     watchbill.clear();
     org.departments.clear();

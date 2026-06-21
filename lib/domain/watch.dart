@@ -1,11 +1,58 @@
-// Grapheion — Watchbills + PQS qualification.
+// Grapheion — Qualifications (PQS), the qualification tree, and Watchbills.
 //
-// PQS says who is QUALIFIED for a watch station; the watchbill ASSIGNS qualified
-// people to stations across the day's watch periods. They're built together so
-// the watchbill can refuse to post an unqualified watchstander — that constraint
-// is the point. In-port watchbill first. All three entities sync over the mesh.
+// ONE Qualification model spans everything a person can be qualified for: watch
+// stations (which feed the watchbill), knowledge quals (3M, DC…), letter quals
+// (CDO, EOOW, TAO), and capstone designations (SWO). Designations sit atop a
+// PREREQUISITE TREE of the others, so the app can tell a JO exactly what's
+// blocking their board. A PersonQual tracks one person's progress on one qual.
+// PQS line-item detail comes later — this scaffolds types + prereqs + stages.
+// All three entities sync over the mesh.
 
 import 'schedule.dart' show startOfDay;
+
+/// What kind of qualification a node is.
+enum QualType { watchStation, knowledge, letter, designation }
+
+extension QualTypeInfo on QualType {
+  String get label {
+    switch (this) {
+      case QualType.watchStation:
+        return 'Watch station';
+      case QualType.knowledge:
+        return 'Knowledge';
+      case QualType.letter:
+        return 'Letter';
+      case QualType.designation:
+        return 'Designation';
+    }
+  }
+}
+
+String qualTypeToken(QualType t) => t.name;
+QualType qualTypeFromToken(String s) => QualType.values
+    .firstWhere((t) => t.name == s, orElse: () => QualType.watchStation);
+
+/// A person's progress stage on a qualification.
+enum QualStage { notStarted, inProgress, boardPending, qualified }
+
+extension QualStageInfo on QualStage {
+  String get label {
+    switch (this) {
+      case QualStage.notStarted:
+        return 'Not started';
+      case QualStage.inProgress:
+        return 'In progress';
+      case QualStage.boardPending:
+        return 'Board pending';
+      case QualStage.qualified:
+        return 'Qualified';
+    }
+  }
+}
+
+String qualStageToken(QualStage q) => q.name;
+QualStage qualStageFromToken(String s) => QualStage.values
+    .firstWhere((q) => q.name == s, orElse: () => QualStage.notStarted);
 
 /// In-port watch periods — 4-hour, with the 1600-2000 dog split so the rotation
 /// shifts by a period each day.
@@ -31,7 +78,6 @@ extension WatchPeriodInfo on WatchPeriod {
     }
   }
 
-  /// Clock range, e.g. "0000-0400".
   String get range {
     switch (this) {
       case WatchPeriod.mid:
@@ -56,127 +102,129 @@ String watchPeriodToken(WatchPeriod p) => p.name;
 WatchPeriod watchPeriodFromToken(String s) => WatchPeriod.values
     .firstWhere((p) => p.name == s, orElse: () => WatchPeriod.mid);
 
-/// PQS progress for a person on a watch station.
-enum QualLevel { notStarted, inProgress, qualified }
-
-extension QualLevelInfo on QualLevel {
-  String get label {
-    switch (this) {
-      case QualLevel.notStarted:
-        return 'Not started';
-      case QualLevel.inProgress:
-        return 'In progress';
-      case QualLevel.qualified:
-        return 'Qualified';
-    }
-  }
-}
-
-String qualLevelToken(QualLevel q) => q.name;
-QualLevel qualLevelFromToken(String s) => QualLevel.values
-    .firstWhere((q) => q.name == s, orElse: () => QualLevel.notStarted);
-
-/// A watch station — a post that needs a qualified watchstander.
-class WatchStation {
+/// A qualification definition — a node in the qual tree.
+class Qualification {
   final String id;
-  String name; // e.g. "Petty Officer of the Watch"
-  String abbr; // short label, e.g. "POOW"
-  bool inPort; // in-port vs underway station
-  int order; // display order on the bill
+  String name; // e.g. "Officer of the Deck (Underway)"
+  String abbr; // short label, e.g. "OOD U/W"
+  QualType type;
+  List<String> prereqIds; // qualifications that must be 'qualified' first
+  int? hoursRequired; // e.g. OOD hours (null = none)
+  bool inPort; // watch-station: postable on the in-port bill
+  int order; // display order
 
-  WatchStation({
+  Qualification({
     required this.id,
     required this.name,
     required this.abbr,
+    required this.type,
+    List<String>? prereqIds,
+    this.hoursRequired,
     this.inPort = true,
     this.order = 0,
-  });
+  }) : prereqIds = prereqIds ?? [];
+
+  bool get isWatchStation => type == QualType.watchStation;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'abbr': abbr,
+        'type': qualTypeToken(type),
+        'prereqIds': prereqIds,
+        'hoursRequired': hoursRequired,
         'inPort': inPort,
         'order': order,
       };
 
-  factory WatchStation.fromJson(Map<String, dynamic> j) => WatchStation(
+  factory Qualification.fromJson(Map<String, dynamic> j) => Qualification(
         id: j['id'] as String,
         name: (j['name'] ?? '') as String,
         abbr: (j['abbr'] ?? '') as String,
+        type: qualTypeFromToken((j['type'] ?? 'watchStation') as String),
+        prereqIds:
+            (j['prereqIds'] as List?)?.map((e) => e as String).toList(),
+        hoursRequired: j['hoursRequired'] as int?,
         inPort: (j['inPort'] ?? true) as bool,
         order: (j['order'] ?? 0) as int,
       );
 }
 
-/// A person's PQS qualification for one watch station.
-class Qual {
-  final String id; // "{personId}|{stationId}"
+/// A person's progress on one qualification.
+class PersonQual {
+  final String id; // "{personId}|{qualId}"
   final String personId; // account id
-  final String stationId;
-  QualLevel level;
+  final String qualId;
+  QualStage stage;
+  int percent; // 0-100 PQS line-item rollup (placeholder until items exist)
+  int hoursLogged; // toward Qualification.hoursRequired
   bool qualifier; // qualified AND authorized to sign others off
   int updatedAtMs;
 
-  Qual({
+  PersonQual({
     required this.id,
     required this.personId,
-    required this.stationId,
-    required this.level,
+    required this.qualId,
+    required this.stage,
+    this.percent = 0,
+    this.hoursLogged = 0,
     this.qualifier = false,
     required this.updatedAtMs,
   });
 
-  static String makeId(String personId, String stationId) =>
-      '$personId|$stationId';
+  static String makeId(String personId, String qualId) => '$personId|$qualId';
 
-  bool get isQualified => level == QualLevel.qualified;
+  bool get isQualified => stage == QualStage.qualified;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'personId': personId,
-        'stationId': stationId,
-        'level': qualLevelToken(level),
+        'qualId': qualId,
+        'stage': qualStageToken(stage),
+        'percent': percent,
+        'hoursLogged': hoursLogged,
         'qualifier': qualifier,
         'updatedAtMs': updatedAtMs,
       };
 
-  factory Qual.fromJson(Map<String, dynamic> j) => Qual(
+  factory PersonQual.fromJson(Map<String, dynamic> j) => PersonQual(
         id: j['id'] as String,
         personId: (j['personId'] ?? '') as String,
-        stationId: (j['stationId'] ?? '') as String,
-        level: qualLevelFromToken((j['level'] ?? 'notStarted') as String),
+        qualId: (j['qualId'] ?? '') as String,
+        stage: qualStageFromToken((j['stage'] ?? 'notStarted') as String),
+        percent: (j['percent'] ?? 0) as int,
+        hoursLogged: (j['hoursLogged'] ?? 0) as int,
         qualifier: (j['qualifier'] ?? false) as bool,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );
 }
 
 /// One watchbill cell: a person posted to a station for a watch period on a
-/// given (in-port) day.
+/// given (in-port) day. The station is a watch-station Qualification.
 class WatchAssignment {
-  final String id; // "{dayMs}|{stationId}|{period}"
-  final int dayMs; // startOfDay of the watch day
-  final String stationId;
+  final String id; // "{dayMs}|{qualId}|{period}"
+  final int dayMs;
+  final String qualId; // the watch-station qualification's id
   final WatchPeriod period;
-  String personId; // account id posted to the watch
+  String personId;
   int updatedAtMs;
 
   WatchAssignment({
     required this.id,
     required this.dayMs,
-    required this.stationId,
+    required this.qualId,
     required this.period,
     required this.personId,
     required this.updatedAtMs,
   });
 
-  static String makeId(int dayMs, String stationId, WatchPeriod period) =>
-      '${startOfDay(dayMs)}|$stationId|${period.name}';
+  static String makeId(int dayMs, String qualId, WatchPeriod period) =>
+      '${startOfDay(dayMs)}|$qualId|${period.name}';
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'dayMs': dayMs,
-        'stationId': stationId,
+        'qualId': qualId,
         'period': watchPeriodToken(period),
         'personId': personId,
         'updatedAtMs': updatedAtMs,
@@ -185,9 +233,32 @@ class WatchAssignment {
   factory WatchAssignment.fromJson(Map<String, dynamic> j) => WatchAssignment(
         id: j['id'] as String,
         dayMs: (j['dayMs'] ?? 0) as int,
-        stationId: (j['stationId'] ?? '') as String,
+        // Back-compat: v1 keyed this as 'stationId'.
+        qualId: (j['qualId'] ?? j['stationId'] ?? '') as String,
         period: watchPeriodFromToken((j['period'] ?? 'mid') as String),
         personId: (j['personId'] ?? '') as String,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );
+}
+
+// --- Qualification-tree logic (pure) --------------------------------------
+
+/// Whether all of [q]'s prerequisites are in [qualifiedIds].
+bool prereqsMet(Qualification q, Set<String> qualifiedIds) =>
+    q.prereqIds.every(qualifiedIds.contains);
+
+/// [q]'s prerequisites that are not yet qualified.
+List<String> missingPrereqs(Qualification q, Set<String> qualifiedIds) =>
+    q.prereqIds.where((id) => !qualifiedIds.contains(id)).toList();
+
+/// Whether everything's in place to sit the board for [q] — prerequisites
+/// qualified, PQS line items complete, hours met — and it isn't already done.
+bool readyToBoard(Qualification q, PersonQual? pq, Set<String> qualifiedIds) {
+  if (pq?.isQualified ?? false) return false;
+  if (!prereqsMet(q, qualifiedIds)) return false;
+  if ((pq?.percent ?? 0) < 100) return false;
+  if (q.hoursRequired != null && (pq?.hoursLogged ?? 0) < q.hoursRequired!) {
+    return false;
+  }
+  return true;
 }

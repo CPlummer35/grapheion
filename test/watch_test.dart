@@ -1,94 +1,128 @@
-// Logic tests for the Watchbill + PQS model.
+// Logic tests for the Qualification tree + Watchbill model.
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grapheion/domain/schedule.dart';
 import 'package:grapheion/domain/watch.dart';
 
+Qualification _q(String id, QualType type,
+        {List<String>? prereqs, int? hours}) =>
+    Qualification(
+        id: id,
+        name: id,
+        abbr: id,
+        type: type,
+        prereqIds: prereqs,
+        hoursRequired: hours);
+
+PersonQual _pq(String person, String qual, QualStage stage,
+        {int percent = 0, int hours = 0}) =>
+    PersonQual(
+      id: PersonQual.makeId(person, qual),
+      personId: person,
+      qualId: qual,
+      stage: stage,
+      percent: percent,
+      hoursLogged: hours,
+      updatedAtMs: 0,
+    );
+
 void main() {
-  group('watch periods', () {
-    test('labels + clock ranges', () {
-      expect(WatchPeriod.mid.range, '0000-0400');
-      expect(WatchPeriod.dog1.label, '1st Dog');
-      expect(WatchPeriod.dog2.range, '1800-2000');
-      expect(WatchPeriod.evening.range, '2000-2400');
-    });
-    test('token round-trips', () {
+  group('enums round-trip', () {
+    test('type / stage / period tokens', () {
+      for (final t in QualType.values) {
+        expect(qualTypeFromToken(qualTypeToken(t)), t);
+      }
+      for (final s in QualStage.values) {
+        expect(qualStageFromToken(qualStageToken(s)), s);
+      }
       for (final p in WatchPeriod.values) {
         expect(watchPeriodFromToken(watchPeriodToken(p)), p);
       }
+      expect(qualStageFromToken('bogus'), QualStage.notStarted);
     });
   });
 
-  group('qual level', () {
-    test('token round-trips + unknown falls back to notStarted', () {
-      for (final q in QualLevel.values) {
-        expect(qualLevelFromToken(qualLevelToken(q)), q);
-      }
-      expect(qualLevelFromToken('bogus'), QualLevel.notStarted);
+  group('watch periods', () {
+    test('labels + ranges', () {
+      expect(WatchPeriod.mid.range, '0000-0400');
+      expect(WatchPeriod.dog1.label, '1st Dog');
+      expect(WatchPeriod.evening.range, '2000-2400');
     });
   });
 
-  group('Qual', () {
-    test('stable id + isQualified', () {
-      final q = Qual(
-        id: Qual.makeId('acct-1', 'sta-poow'),
-        personId: 'acct-1',
-        stationId: 'sta-poow',
-        level: QualLevel.qualified,
-        qualifier: true,
-        updatedAtMs: 5,
-      );
-      expect(q.id, 'acct-1|sta-poow');
-      expect(q.isQualified, isTrue);
-      final back = Qual.fromJson(q.toJson());
-      expect(back.level, QualLevel.qualified);
-      expect(back.qualifier, isTrue);
-      expect(back.personId, 'acct-1');
-      expect(back.stationId, 'sta-poow');
+  group('Qualification', () {
+    test('round-trips with type, prereqs, hours', () {
+      final q = _q('swo', QualType.designation,
+          prereqs: ['ood-uw', 'cicwo'], hours: 100);
+      final back = Qualification.fromJson(q.toJson());
+      expect(back.type, QualType.designation);
+      expect(back.prereqIds, ['ood-uw', 'cicwo']);
+      expect(back.hoursRequired, 100);
+      expect(back.isWatchStation, isFalse);
     });
-    test('in-progress is not qualified', () {
-      final q = Qual(
-        id: Qual.makeId('a', 'b'),
-        personId: 'a',
-        stationId: 'b',
-        level: QualLevel.inProgress,
-        updatedAtMs: 0,
-      );
-      expect(q.isQualified, isFalse);
+    test('watch-station type is flagged', () {
+      expect(_q('poow', QualType.watchStation).isWatchStation, isTrue);
+    });
+  });
+
+  group('PersonQual', () {
+    test('stable id, isQualified, round-trip', () {
+      final pq = _pq('acct-1', 'ood-uw', QualStage.qualified,
+          percent: 100, hours: 120);
+      expect(pq.id, 'acct-1|ood-uw');
+      expect(pq.isQualified, isTrue);
+      final back = PersonQual.fromJson(pq.toJson());
+      expect(back.stage, QualStage.qualified);
+      expect(back.percent, 100);
+      expect(back.hoursLogged, 120);
+    });
+    test('board-pending is not yet qualified', () {
+      expect(_pq('a', 'b', QualStage.boardPending).isQualified, isFalse);
+    });
+  });
+
+  group('qualification tree', () {
+    final swo = _q('swo', QualType.designation,
+        prereqs: ['ood-uw', 'cicwo', '3m'], hours: 100);
+
+    test('prereqsMet / missingPrereqs', () {
+      final none = <String>{};
+      expect(prereqsMet(swo, none), isFalse);
+      expect(missingPrereqs(swo, none), ['ood-uw', 'cicwo', '3m']);
+      final partial = {'ood-uw', '3m'};
+      expect(missingPrereqs(swo, partial), ['cicwo']);
+      final all = {'ood-uw', 'cicwo', '3m'};
+      expect(prereqsMet(swo, all), isTrue);
+    });
+
+    test('readyToBoard needs prereqs + 100% + hours, and not already done', () {
+      final all = {'ood-uw', 'cicwo', '3m'};
+      // prereqs done but line items incomplete
+      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 80, hours: 120), all), isFalse);
+      // 100% but short on hours
+      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 50), all), isFalse);
+      // prereqs missing
+      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 120), {'ood-uw'}), isFalse);
+      // everything in place
+      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 120), all), isTrue);
+      // already qualified
+      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.qualified, percent: 100, hours: 120), all), isFalse);
     });
   });
 
   group('WatchAssignment', () {
-    test('id is keyed by day-start, station, period', () {
-      final day = DateTime(2026, 6, 20, 13, 30).millisecondsSinceEpoch;
-      final id = WatchAssignment.makeId(day, 'sta-poow', WatchPeriod.morning);
-      expect(id, '${startOfDay(day)}|sta-poow|morning');
-    });
-    test('round-trips', () {
-      final day = DateTime(2026, 6, 20).millisecondsSinceEpoch;
-      final a = WatchAssignment(
-        id: WatchAssignment.makeId(day, 'sta-poow', WatchPeriod.mid),
-        dayMs: day,
-        stationId: 'sta-poow',
-        period: WatchPeriod.mid,
-        personId: 'acct-1',
-        updatedAtMs: 7,
-      );
-      final back = WatchAssignment.fromJson(a.toJson());
-      expect(back.period, WatchPeriod.mid);
-      expect(back.stationId, 'sta-poow');
-      expect(back.personId, 'acct-1');
-    });
-  });
-
-  group('WatchStation', () {
-    test('round-trips', () {
-      final s = WatchStation(
-          id: 'sta-poow', name: 'Petty Officer of the Watch', abbr: 'POOW', order: 2);
-      final back = WatchStation.fromJson(s.toJson());
-      expect(back.abbr, 'POOW');
-      expect(back.inPort, isTrue);
-      expect(back.order, 2);
+    test('id keyed by day-start/qual/period; legacy stationId reads back', () {
+      final day = DateTime(2026, 6, 20, 13).millisecondsSinceEpoch;
+      expect(WatchAssignment.makeId(day, 'poow', WatchPeriod.morning),
+          '${startOfDay(day)}|poow|morning');
+      final back = WatchAssignment.fromJson({
+        'id': 'x',
+        'dayMs': day,
+        'stationId': 'poow', // v1 key
+        'period': 'mid',
+        'personId': 'acct-1',
+      });
+      expect(back.qualId, 'poow');
     });
   });
 }

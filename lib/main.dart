@@ -401,8 +401,8 @@ class _HomePageState extends State<HomePage> {
           for (final p in _store.pmsChecks.values) {
             _bleBroadcast(kPmsChecks, p.id, jsonEncode(p.toJson()));
           }
-          for (final s in _store.watchStations.values) {
-            _bleBroadcast(kWatchStations, s.id, jsonEncode(s.toJson()));
+          for (final s in _store.qualifications.values) {
+            _bleBroadcast(kQualifications, s.id, jsonEncode(s.toJson()));
           }
           for (final q in _store.quals.values) {
             _bleBroadcast(kQuals, q.id, jsonEncode(q.toJson()));
@@ -766,7 +766,7 @@ class _HomePageState extends State<HomePage> {
       kAccounts,
       kCasreps,
       kPmsChecks,
-      kWatchStations,
+      kQualifications,
       kQuals,
       kWatchbill,
     ]) {
@@ -811,24 +811,26 @@ class _HomePageState extends State<HomePage> {
 
   // --- Watchbills + PQS -----------------------------------------------------
 
-  void _saveWatchStation(WatchStation s) {
-    final json = jsonEncode(s.toJson());
-    _store.watchStations[s.id] = s;
-    _node!.putRaw(kWatchStations, s.id, json);
-    _bleBroadcast(kWatchStations, s.id, json);
+  void _saveQualification(Qualification q) {
+    final json = jsonEncode(q.toJson());
+    _store.qualifications[q.id] = q;
+    _node!.putRaw(kQualifications, q.id, json);
+    _bleBroadcast(kQualifications, q.id, json);
     if (mounted) setState(() {});
   }
 
-  /// Set a person's PQS level (and qualifier flag) for a station, and sync it.
-  void _setQual(String personId, String stationId, QualLevel level,
+  /// Set a person's PQS stage (and qualifier flag) for a qualification, + sync.
+  void _setQual(String personId, String qualId, QualStage stage,
       {bool? qualifier}) {
-    final id = Qual.makeId(personId, stationId);
+    final id = PersonQual.makeId(personId, qualId);
     final existing = _store.quals[id];
-    final q = Qual(
+    final q = PersonQual(
       id: id,
       personId: personId,
-      stationId: stationId,
-      level: level,
+      qualId: qualId,
+      stage: stage,
+      percent: stage == QualStage.qualified ? 100 : (existing?.percent ?? 0),
+      hoursLogged: existing?.hoursLogged ?? 0,
       qualifier: qualifier ?? existing?.qualifier ?? false,
       updatedAtMs: DateTime.now().millisecondsSinceEpoch,
     );
@@ -841,8 +843,8 @@ class _HomePageState extends State<HomePage> {
 
   /// Post (or clear, if [personId] is null) a person to a watch on the bill.
   void _setWatch(
-      int dayMs, String stationId, WatchPeriod period, String? personId) {
-    final id = WatchAssignment.makeId(dayMs, stationId, period);
+      int dayMs, String qualId, WatchPeriod period, String? personId) {
+    final id = WatchAssignment.makeId(dayMs, qualId, period);
     if (personId == null) {
       _store.watchbill.remove(id);
       _node!.putRaw(kWatchbill, id, jsonEncode({'id': id, 'personId': ''}));
@@ -851,7 +853,7 @@ class _HomePageState extends State<HomePage> {
       final a = WatchAssignment(
         id: id,
         dayMs: startOfDay(dayMs),
-        stationId: stationId,
+        qualId: qualId,
         period: period,
         personId: personId,
         updatedAtMs: DateTime.now().millisecondsSinceEpoch,
@@ -864,23 +866,69 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() {});
   }
 
-  /// Seed the default in-port watch stations (stable ids; re-seed refreshes).
-  void _seedWatchStations() {
-    // abbr, name
-    const seeds = <(String, String)>[
-      ('CDO', 'Command Duty Officer'),
-      ('OOD', 'Officer of the Deck (in-port)'),
-      ('POOW', 'Petty Officer of the Watch'),
-      ('MOOW', 'Messenger of the Watch'),
-      ('S&S', 'Sounding & Security Patrol'),
-      ('SEC', 'Roving Security Patrol'),
-      ('DUTYENG', 'Duty Engineer'),
+  /// Seed the default qualification tree — in-port watch stations + the SWO
+  /// component quals + the SWO designation (with its prerequisite tree). Stable
+  /// ids, so re-seeding refreshes.
+  void _seedQualifications() {
+    // id, abbr, name, type, inPort, hoursRequired, prereqIds
+    final seeds =
+        <(String, String, String, QualType, bool, int?, List<String>)>[
+      // In-port watch stations (feed the bill)
+      ('q-cdo', 'CDO', 'Command Duty Officer', QualType.watchStation, true,
+          null, []),
+      ('q-oodip', 'OOD I/P', 'Officer of the Deck (In-Port)',
+          QualType.watchStation, true, null, []),
+      ('q-poow', 'POOW', 'Petty Officer of the Watch', QualType.watchStation,
+          true, null, []),
+      ('q-moow', 'MOOW', 'Messenger of the Watch', QualType.watchStation, true,
+          null, []),
+      ('q-sns', 'S&S', 'Sounding & Security Patrol', QualType.watchStation,
+          true, null, []),
+      ('q-sec', 'SEC', 'Roving Security Patrol', QualType.watchStation, true,
+          null, []),
+      ('q-dutyeng', 'DUTYENG', 'Duty Engineer', QualType.watchStation, true,
+          null, []),
+      // Underway watch stations (SWO prereqs; not on the in-port bill)
+      ('q-ooduw', 'OOD U/W', 'Officer of the Deck (Underway)',
+          QualType.watchStation, false, 100, []),
+      ('q-cicwo', 'CICWO', 'CIC Watch Officer', QualType.watchStation, false,
+          null, []),
+      // Knowledge quals
+      ('q-3m', '3M', '3-M / PMS Qualification', QualType.knowledge, false, null,
+          []),
+      ('q-dc', 'Basic DC', 'Basic Damage Control', QualType.knowledge, false,
+          null, []),
+      ('q-swoeng', 'SWO Eng', 'SWO Engineering', QualType.knowledge, false,
+          null, []),
+      ('q-boato', 'Boat O', 'Small Boat Officer', QualType.knowledge, false,
+          null, []),
+      // Letter quals (follow-on)
+      ('q-eoow', 'EOOW', 'Engineering Officer of the Watch', QualType.letter,
+          false, null, []),
+      ('q-tao', 'TAO', 'Tactical Action Officer', QualType.letter, false, null,
+          []),
+      // Capstone designation, atop its prerequisite tree
+      ('q-swo', 'SWO', 'Surface Warfare Officer', QualType.designation, false,
+          null, [
+        'q-3m',
+        'q-dc',
+        'q-boato',
+        'q-swoeng',
+        'q-oodip',
+        'q-ooduw',
+        'q-cicwo'
+      ]),
     ];
     for (var i = 0; i < seeds.length; i++) {
-      _saveWatchStation(WatchStation(
-        id: 'sta-${seeds[i].$1.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')}',
-        name: seeds[i].$2,
-        abbr: seeds[i].$1,
+      final s = seeds[i];
+      _saveQualification(Qualification(
+        id: s.$1,
+        abbr: s.$2,
+        name: s.$3,
+        type: s.$4,
+        inPort: s.$5,
+        hoursRequired: s.$6,
+        prereqIds: s.$7,
         order: i,
       ));
     }
@@ -1459,9 +1507,10 @@ class _HomePageState extends State<HomePage> {
   // --- Watchbills + PQS -----------------------------------------------------
 
   static const _qualColors = {
-    QualLevel.qualified: Colors.green,
-    QualLevel.inProgress: Colors.orange,
-    QualLevel.notStarted: Colors.grey,
+    QualStage.qualified: Colors.green,
+    QualStage.boardPending: Colors.blue,
+    QualStage.inProgress: Colors.orange,
+    QualStage.notStarted: Colors.grey,
   };
 
   Widget _watchPage() {
@@ -1482,21 +1531,23 @@ class _HomePageState extends State<HomePage> {
   /// In-port watchbill for one day + watch period: a row per station with its
   /// posted watchstander (only qualified people can be posted).
   Widget _watchBillView() {
-    final stations = _store.watchStations.values.toList()
+    final stations = _store.qualifications.values
+        .where((q) => q.isWatchStation && q.inPort)
+        .toList()
       ..sort((a, b) => a.order.compareTo(b.order));
     if (stations.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('No watch stations yet.',
+            const Text('No in-port watch stations yet.',
                 style: TextStyle(color: Colors.grey)),
             if (_canManageWatch) ...[
               const SizedBox(height: 16),
               OutlinedButton.icon(
-                onPressed: _seedWatchStations,
+                onPressed: _seedQualifications,
                 icon: const Icon(Icons.anchor),
-                label: const Text('Load default in-port stations'),
+                label: const Text('Load default stations + SWO quals'),
               ),
             ],
           ]),
@@ -1555,7 +1606,7 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
-  Widget _watchBillRow(int day, WatchStation s, WatchPeriod period) {
+  Widget _watchBillRow(int day, Qualification s, WatchPeriod period) {
     final assignee = _store.watchAssignee(day, s.id, period);
     final unqualified =
         assignee != null && !_store.isQualified(assignee, s.id);
@@ -1579,7 +1630,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _openWatchAssign(int day, WatchStation s, WatchPeriod period) {
+  void _openWatchAssign(int day, Qualification s, WatchPeriod period) {
     final qualified = _store.qualifiedFor(s.id)
       ..sort((a, b) => _personName(a).compareTo(_personName(b)));
     final current = _store.watchAssignee(day, s.id, period);
@@ -1626,14 +1677,14 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  /// PQS — each work-center member's qualification level per watch station.
+  /// PQS — each work-center member's progress across the whole qualification
+  /// tree (designations first, then watch stations, knowledge, letters).
   Widget _pqsView() {
-    final stations = _store.watchStations.values.toList()
-      ..sort((a, b) => a.order.compareTo(b.order));
+    final quals = _store.qualifications.values.toList()..sort(_qualSort);
     final people = _watchPeople();
-    if (stations.isEmpty) {
+    if (quals.isEmpty) {
       return const Center(
-          child: Text('Add watch stations first (BILL tab).',
+          child: Text('Load the qualification set first (BILL tab).',
               style: TextStyle(color: Colors.grey)));
     }
     if (people.isEmpty) {
@@ -1645,39 +1696,66 @@ class _HomePageState extends State<HomePage> {
       for (final (pid, name) in people)
         ExpansionTile(
           title: Text(name),
-          subtitle: Text(_qualSummary(pid, stations)),
-          children: [
-            for (final s in stations)
-              ListTile(
-                dense: true,
-                title: Text('${s.abbr} — ${s.name}'),
-                trailing: _qualChip(pid, s.id),
-                onTap: _canManageWatch ? () => _openQualSet(pid, s) : null,
-              ),
-          ],
+          subtitle: Text(_qualSummary(pid)),
+          children: [for (final q in quals) _qualRow(pid, q)],
         ),
     ]);
   }
 
-  String _qualSummary(String pid, List<WatchStation> stations) {
+  static int _qualRank(QualType t) => const {
+        QualType.designation: 0,
+        QualType.watchStation: 1,
+        QualType.knowledge: 2,
+        QualType.letter: 3,
+      }[t]!;
+
+  int _qualSort(Qualification a, Qualification b) {
+    final r = _qualRank(a.type).compareTo(_qualRank(b.type));
+    return r != 0 ? r : a.order.compareTo(b.order);
+  }
+
+  Widget _qualRow(String pid, Qualification q) {
+    Widget? subtitle;
+    if (q.type == QualType.designation && q.prereqIds.isNotEmpty) {
+      final qualifiedIds = _store.qualifiedIdsFor(pid);
+      final done = q.prereqIds.where(qualifiedIds.contains).length;
+      final ready = readyToBoard(
+          q, _store.quals[PersonQual.makeId(pid, q.id)], qualifiedIds);
+      subtitle = Text(
+        '$done/${q.prereqIds.length} prereqs${ready ? ' · ready to board' : ''}',
+        style: TextStyle(
+            fontSize: 11, color: ready ? Colors.green : Colors.grey),
+      );
+    }
+    return ListTile(
+      dense: true,
+      title: Text('${q.abbr} — ${q.name}'),
+      subtitle: subtitle,
+      trailing: _qualChip(pid, q.id),
+      onTap: _canManageWatch ? () => _openQualSet(pid, q) : null,
+    );
+  }
+
+  String _qualSummary(String pid) {
     var q = 0, ip = 0;
-    for (final s in stations) {
-      switch (_store.qualLevel(pid, s.id)) {
-        case QualLevel.qualified:
+    for (final qual in _store.qualifications.values) {
+      switch (_store.qualStage(pid, qual.id)) {
+        case QualStage.qualified:
           q++;
-        case QualLevel.inProgress:
+        case QualStage.inProgress:
+        case QualStage.boardPending:
           ip++;
-        case QualLevel.notStarted:
+        case QualStage.notStarted:
           break;
       }
     }
     return '$q qualified · $ip in progress';
   }
 
-  Widget _qualChip(String pid, String stationId) {
-    final level = _store.qualLevel(pid, stationId);
-    final q = _store.quals[Qual.makeId(pid, stationId)];
-    final color = _qualColors[level]!;
+  Widget _qualChip(String pid, String qualId) {
+    final stage = _store.qualStage(pid, qualId);
+    final q = _store.quals[PersonQual.makeId(pid, qualId)];
+    final color = _qualColors[stage]!;
     return Row(mainAxisSize: MainAxisSize.min, children: [
       if (q?.qualifier ?? false)
         const Padding(
@@ -1691,52 +1769,67 @@ class _HomePageState extends State<HomePage> {
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: color),
         ),
-        child: Text(level.label,
+        child: Text(stage.label,
             style: TextStyle(
                 color: color, fontSize: 11, fontWeight: FontWeight.w600)),
       ),
     ]);
   }
 
-  void _openQualSet(String pid, WatchStation s) {
+  void _openQualSet(String pid, Qualification qual) {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
-        final q = _store.quals[Qual.makeId(pid, s.id)];
-        final level = q?.level ?? QualLevel.notStarted;
+        final pq = _store.quals[PersonQual.makeId(pid, qual.id)];
+        final stage = pq?.stage ?? QualStage.notStarted;
+        final missing = qual.type == QualType.designation
+            ? missingPrereqs(qual, _store.qualifiedIdsFor(pid))
+                .map((id) => _store.qualifications[id]?.abbr ?? id)
+                .toList()
+            : <String>[];
         return SafeArea(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('${_personName(pid)} · ${s.abbr}',
-                  style: Theme.of(ctx).textTheme.titleMedium),
-            ),
-            for (final l in QualLevel.values)
-              ListTile(
-                leading: Icon(Icons.circle, size: 14, color: _qualColors[l]),
-                title: Text(l.label),
-                trailing: level == l
-                    ? const Icon(Icons.check, color: Colors.green)
-                    : null,
-                onTap: () {
-                  _setQual(pid, s.id, l);
-                  setS(() {});
-                },
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                child: Text('${_personName(pid)} · ${qual.abbr}',
+                    style: Theme.of(ctx).textTheme.titleMedium),
               ),
-            const Divider(),
-            SwitchListTile(
-              secondary: const Icon(Icons.star, color: Colors.amber),
-              title: const Text('Qualifier (can sign others off)'),
-              value: q?.qualifier ?? false,
-              onChanged: level == QualLevel.qualified
-                  ? (v) {
-                      _setQual(pid, s.id, QualLevel.qualified, qualifier: v);
-                      setS(() {});
-                    }
-                  : null,
-            ),
-            const SizedBox(height: 8),
-          ]),
+              if (missing.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text('Prereqs remaining: ${missing.join(', ')}',
+                      style:
+                          const TextStyle(color: Colors.orange, fontSize: 12)),
+                ),
+              for (final l in QualStage.values)
+                ListTile(
+                  leading: Icon(Icons.circle, size: 14, color: _qualColors[l]),
+                  title: Text(l.label),
+                  trailing: stage == l
+                      ? const Icon(Icons.check, color: Colors.green)
+                      : null,
+                  onTap: () {
+                    _setQual(pid, qual.id, l);
+                    setS(() {});
+                  },
+                ),
+              const Divider(),
+              SwitchListTile(
+                secondary: const Icon(Icons.star, color: Colors.amber),
+                title: const Text('Qualifier (can sign others off)'),
+                value: pq?.qualifier ?? false,
+                onChanged: stage == QualStage.qualified
+                    ? (v) {
+                        _setQual(pid, qual.id, QualStage.qualified,
+                            qualifier: v);
+                        setS(() {});
+                      }
+                    : null,
+              ),
+              const SizedBox(height: 8),
+            ]),
+          ),
         );
       }),
     );
