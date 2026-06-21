@@ -1088,6 +1088,18 @@ class _HomePageState extends State<HomePage> {
   /// job advanced, was returned, or was closed.
   void _notifyForChange(Job? old, Job job, String? peer) {
     final title = job.title.isEmpty ? 'a job' : job.title;
+    // DIVO: a CASREP-eligible job (priority 1–3) with no CASREP yet — prompt to
+    // write one. Fires on origination or when the priority changes into range.
+    if (_role == Role.divo &&
+        casrepEligible(job.priority) &&
+        !job.isClosed &&
+        !_hasCasrep(job.id) &&
+        (old == null || old.priority != job.priority)) {
+      _notify(title,
+          'priority ${job.priority} — write a CASREP (${casrepCategoryLabel(job.priority)})',
+          peer);
+      return;
+    }
     final mineNow = _needsMyAction(job);
     final mineBefore = old != null && _needsMyAction(old);
     if (mineNow && !mineBefore) {
@@ -1160,7 +1172,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     // Role-scoped visibility: a WCS/Tech sees their work center, LPO/DIVO their
-    // division, CHENG their department, 3MC the ship, the PE only TA'd jobs.
+    // division, DH their department, 3MC the ship, the PE only TA'd jobs.
     final mine = _jobs.values.where((j) => _needsMyAction(j) && _canSee(j)).toList()
       ..sort((a, b) => a.priority.compareTo(b.priority));
     final board = _jobs.values.where((j) => !j.isClosed && _canSee(j)).toList()
@@ -1294,13 +1306,13 @@ class _HomePageState extends State<HomePage> {
   bool get _canSeeCasreps =>
       _role == Role.divo ||
       _role == Role.threeMC ||
-      _role == Role.cheng ||
+      _role == Role.dh ||
       _role == Role.portEngineer;
 
   Widget _casrepPage() {
     if (!_canSeeCasreps) {
       return const Center(
-        child: Text('CASREPs are visible to DIVO, 3MC, CHENG, and Port Engineer.',
+        child: Text('CASREPs are visible to DIVO, 3MC, DH, and Port Engineer.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey)),
       );
@@ -1451,7 +1463,8 @@ class _HomePageState extends State<HomePage> {
         TextEditingController(text: existing?.narrative ?? job.symptom);
     final etrCtrl = TextEditingController(text: existing?.etr ?? '');
     final partsCtrl = TextEditingController(text: existing?.partsNeeded ?? '');
-    OpImpact impact = existing?.opImpact ?? OpImpact.c2;
+    // New CASREP: default the category from the job's priority (editable).
+    OpImpact impact = existing?.opImpact ?? casrepImpactForPriority(job.priority);
 
     showModalBottomSheet<void>(
       context: context,

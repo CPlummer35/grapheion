@@ -13,7 +13,7 @@ enum Role {
   lpo, // Leading Petty Officer
   divo, // Division Officer
   threeMC, // 3-M Coordinator — screens the job into the CSMP
-  cheng, // Chief Engineer / Department Head
+  dh, // Department Head (universal — CHENG/WEPS/OPS/CSO/SUPPO)
   portEngineer, // OFF-SHIP — Regional Maintenance Center; reached over the relay
 }
 
@@ -31,8 +31,8 @@ extension RoleInfo on Role {
         return 'Division Officer';
       case Role.threeMC:
         return '3-M Coordinator';
-      case Role.cheng:
-        return 'Chief Engineer';
+      case Role.dh:
+        return 'Department Head';
       case Role.portEngineer:
         return 'Port Engineer (off-ship)';
     }
@@ -51,8 +51,8 @@ extension RoleInfo on Role {
         return 'DIVO';
       case Role.threeMC:
         return '3MC';
-      case Role.cheng:
-        return 'CHENG';
+      case Role.dh:
+        return 'DH';
       case Role.portEngineer:
         return 'PORT ENG';
     }

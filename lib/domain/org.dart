@@ -176,7 +176,7 @@ Scope scopeForRole(Role r) {
     case Role.lpo:
     case Role.divo:
       return Scope.division;
-    case Role.cheng:
+    case Role.dh:
       return Scope.department;
     case Role.threeMC:
       return Scope.ship;
