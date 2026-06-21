@@ -30,6 +30,7 @@ import 'domain/casrep.dart';
 import 'domain/chain.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
+import 'domain/sked.dart';
 import 'mesh_store.dart';
 import 'notifications.dart';
 
@@ -390,6 +391,9 @@ class _HomePageState extends State<HomePage> {
           for (final c in _casreps.values) {
             _bleBroadcast(kCasreps, c.id, jsonEncode(c.toJson()));
           }
+          for (final p in _store.pmsChecks.values) {
+            _bleBroadcast(kPmsChecks, p.id, jsonEncode(p.toJson()));
+          }
         }
         if (mounted) setState(() {});
       });
@@ -745,6 +749,7 @@ class _HomePageState extends State<HomePage> {
       kWcs,
       kAccounts,
       kCasreps,
+      kPmsChecks,
     ]) {
       for (final id in node.listDocuments(coll)) {
         final raw = node.getRaw(coll, id);
@@ -784,6 +789,49 @@ class _HomePageState extends State<HomePage> {
 
   String _nextCasrepNumber() => _store.nextCasrepNumber();
   Casrep? _casrepForJob(String jobId) => _store.casrepForJob(jobId);
+
+  // --- SKED (PMS) -----------------------------------------------------------
+
+  void _savePmsCheck(PmsCheck c) {
+    final json = jsonEncode(c.toJson());
+    _store.pmsChecks[c.id] = c;
+    _node!.putRaw(kPmsChecks, c.id, json);
+    _bleBroadcast(kPmsChecks, c.id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// Record a PMS check as accomplished by the signed-in person (resets the
+  /// cycle) and sync it.
+  void _accomplishCheck(PmsCheck c) {
+    c.accomplish(_name, DateTime.now().millisecondsSinceEpoch);
+    _savePmsCheck(c);
+  }
+
+  PmsCheck _createPmsCheck({
+    required String mrc,
+    required String title,
+    required String ein,
+    required Periodicity periodicity,
+    required int estMinutes,
+  }) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final c = PmsCheck.create(
+      id: 'pms-$now-${_randHex(3)}',
+      mrc: mrc,
+      title: title,
+      ein: ein,
+      workcenter: _workcenter,
+      periodicity: periodicity,
+      estMinutes: estMinutes,
+      nowMs: now,
+    );
+    _savePmsCheck(c);
+    return c;
+  }
+
+  /// Roles that schedule PMS work (vs. just accomplishing it).
+  bool get _canManageSked =>
+      _role != null && _role != Role.technician && _role != Role.portEngineer;
 
   void _saveOrgEntity(String coll, String id, String json) {
     _node!.putRaw(coll, id, json);
@@ -1042,6 +1090,20 @@ class _HomePageState extends State<HomePage> {
         label: const Text('New job'),
       );
 
+  /// The action button for the current feature (CSMP → new job, SKED → add
+  /// check), or none.
+  Widget? _featureFab() {
+    if (_feature == 0) return _newJobFab();
+    if (_feature == 1 && _canManageSked) {
+      return FloatingActionButton.extended(
+        onPressed: _openAddCheck,
+        icon: const Icon(Icons.add),
+        label: const Text('Add check'),
+      );
+    }
+    return null;
+  }
+
   /// Wide layout: the vertical feature rail + content side by side.
   Widget _wideHome(List<Job> mine, List<Job> pending, List<Job> active,
       List<Job> completed) {
@@ -1051,7 +1113,7 @@ class _HomePageState extends State<HomePage> {
         actions: _appBarActions(),
         bottom: _headerBar(),
       ),
-      floatingActionButton: _feature == 0 ? _newJobFab() : null,
+      floatingActionButton: _featureFab(),
       body: Row(children: [
         _featureRail(),
         const VerticalDivider(width: 1),
@@ -1097,7 +1159,7 @@ class _HomePageState extends State<HomePage> {
           title: Text(_features[_feature].$2),
           actions: _appBarActions(),
         ),
-        floatingActionButton: _feature == 0 ? _newJobFab() : null,
+        floatingActionButton: _featureFab(),
         body: _featureBody(mine, pending, active, completed),
       ),
     );
@@ -1170,8 +1232,7 @@ class _HomePageState extends State<HomePage> {
       case 4:
         return _connectionsPage();
       case 1:
-        return _stubPage(Icons.event_repeat, 'SKED',
-            'Planned Maintenance System scheduling.');
+        return _skedPage();
       case 3:
         return _stubPage(
             Icons.groups, 'Watchbills', 'Watch-station rotation + assignments.');
@@ -1232,6 +1293,167 @@ class _HomePageState extends State<HomePage> {
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.grey)),
         ]),
+      ),
+    );
+  }
+
+  // --- SKED (PMS schedule) page --------------------------------------------
+
+  static const _skedColors = {
+    PmsStatus.overdue: Colors.red,
+    PmsStatus.due: Colors.orange,
+    PmsStatus.scheduled: Colors.green,
+  };
+
+  Widget _skedPage() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final checks = _store.pmsChecks.values.where(_store.canSeeCheck).toList()
+      // Overdue first, then due, then scheduled; ties broken by next-due.
+      ..sort((a, b) {
+        final r = b.statusAt(now).index.compareTo(a.statusAt(now).index);
+        return r != 0 ? r : a.nextDueMs.compareTo(b.nextDueMs);
+      });
+    if (checks.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            _canManageSked
+                ? 'No PMS checks scheduled.\nTap “Add check” to start the schedule.'
+                : 'No PMS checks for your work center yet.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.grey),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      itemCount: checks.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final c = checks[i];
+        final status = c.statusAt(now);
+        final color = _skedColors[status]!;
+        return ListTile(
+          leading: Container(
+            width: 10,
+            height: 10,
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          title: Text(c.title.isEmpty ? c.mrc : c.title),
+          subtitle: Text([
+            'MRC ${c.mrc}',
+            c.periodicity.code,
+            if (c.ein.isNotEmpty) c.ein,
+            c.workcenter,
+            _dueText(c, now),
+            if (!c.neverDone) 'last: ${c.lastBy}',
+          ].join('  ·  ')),
+          isThreeLine: true,
+          trailing: FilledButton.tonal(
+            onPressed: () => _accomplishCheck(c),
+            child: const Text('Accomplish'),
+          ),
+        );
+      },
+    );
+  }
+
+  String _dueText(PmsCheck c, int nowMs) {
+    final d = c.daysUntilDue(nowMs);
+    switch (c.statusAt(nowMs)) {
+      case PmsStatus.overdue:
+        return 'OVERDUE ${-d}d';
+      case PmsStatus.due:
+        return d <= 0 ? 'DUE today' : 'DUE in ${d}d';
+      case PmsStatus.scheduled:
+        return 'due in ${d}d';
+    }
+  }
+
+  void _openAddCheck() {
+    final mrc = TextEditingController();
+    final title = TextEditingController();
+    final ein = TextEditingController();
+    final mins = TextEditingController(text: '15');
+    Periodicity per = Periodicity.monthly;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => Padding(
+          padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Add PMS check (${_workcenter})',
+                    style: Theme.of(ctx).textTheme.titleLarge),
+                const SizedBox(height: 16),
+                TextField(
+                    controller: mrc,
+                    decoration: const InputDecoration(
+                        labelText: 'MRC / MIP number (e.g. 5921/001-23)')),
+                const SizedBox(height: 12),
+                TextField(
+                    controller: title,
+                    decoration:
+                        const InputDecoration(labelText: 'What the check covers')),
+                const SizedBox(height: 12),
+                TextField(
+                    controller: ein,
+                    decoration: const InputDecoration(labelText: 'Equipment EIN')),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(
+                    child: DropdownButtonFormField<Periodicity>(
+                      initialValue: per,
+                      decoration:
+                          const InputDecoration(labelText: 'Periodicity'),
+                      items: Periodicity.values
+                          .map((p) => DropdownMenuItem(
+                              value: p,
+                              child: Text('${p.label} (${p.code})')))
+                          .toList(),
+                      onChanged: (p) => setS(() => per = p ?? per),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 110,
+                    child: TextField(
+                      controller: mins,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Est. min'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: () {
+                    final m = mrc.text.trim();
+                    if (m.isEmpty) return;
+                    _createPmsCheck(
+                      mrc: m,
+                      title: title.text.trim(),
+                      ein: ein.text.trim(),
+                      periodicity: per,
+                      estMinutes: int.tryParse(mins.text.trim()) ?? 0,
+                    );
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Add to schedule'),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -14,6 +14,7 @@ import 'domain/casrep.dart';
 import 'domain/chain.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
+import 'domain/sked.dart';
 
 // Synced collection names (shared with the BLE/Iroh wiring in the widget).
 const kJobs = 'jobs';
@@ -24,6 +25,7 @@ const kDivs = 'divisions';
 const kWcs = 'workcenters';
 const kAccounts = 'accounts';
 const kCasreps = 'casreps';
+const kPmsChecks = 'pmschecks'; // SKED / PMS checks
 
 /// A peer seen on the mesh, from its presence beat.
 class Peer {
@@ -51,6 +53,7 @@ class MeshStore {
   final Map<String, List<JobEvent>> events = {};
   final Map<String, Account> accounts = {};
   final Map<String, Casrep> casreps = {};
+  final Map<String, PmsCheck> pmsChecks = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
   final Map<String, int> lastSeenMs = {}; // local receive time per peer node id
@@ -103,6 +106,9 @@ class MeshStore {
       } else if (coll == kCasreps) {
         casreps[docId] =
             Casrep.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kPmsChecks) {
+        pmsChecks[docId] =
+            PmsCheck.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       }
     } catch (_) {}
   }
@@ -158,6 +164,19 @@ class MeshStore {
       viewerWorkcenterId: workcenter,
       jobWorkcenterId: j.workcenter,
       jobHasTa: j.taRequested,
+      org: org,
+    );
+  }
+
+  /// Whether the signed-in role may see PMS check [c] (same org scoping as
+  /// jobs; the off-ship Port Engineer has no PMS checks).
+  bool canSeeCheck(PmsCheck c) {
+    if (org.workcenters.isEmpty || role == null) return true;
+    return canSeeJob(
+      role: role!,
+      viewerWorkcenterId: workcenter,
+      jobWorkcenterId: c.workcenter,
+      jobHasTa: false,
       org: org,
     );
   }
@@ -248,6 +267,7 @@ class MeshStore {
     events.clear();
     accounts.clear();
     casreps.clear();
+    pmsChecks.clear();
     org.departments.clear();
     org.divisions.clear();
     org.workcenters.clear();
