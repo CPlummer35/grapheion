@@ -1024,9 +1024,9 @@ class _HomePageState extends State<HomePage> {
               label: const Text('New job'),
             )
           : null,
-      body: Column(children: [
-        _featureBar(),
-        const Divider(height: 1),
+      body: Row(children: [
+        _featureRail(),
+        const VerticalDivider(width: 1),
         Expanded(child: _featureBody(mine, board, completed)),
       ]),
     );
@@ -1044,46 +1044,45 @@ class _HomePageState extends State<HomePage> {
     (Icons.how_to_reg, 'Muster'),
   ];
 
-  /// Top feature bar: tappable buttons that wrap (no horizontal scrolling).
-  Widget _featureBar() {
-    return Material(
+  /// Left feature rail: a vertical, tappable list of features (scrolls if it
+  /// can't all fit; content switches on tap — no swipe).
+  Widget _featureRail() {
+    return Container(
+      width: 94,
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-        child: Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (var i = 0; i < _features.length; i++)
-              _featureChip(i, _features[i].$1, _features[i].$2),
-          ],
-        ),
+      child: SingleChildScrollView(
+        child: Column(children: [
+          const SizedBox(height: 8),
+          for (var i = 0; i < _features.length; i++)
+            _featureRailItem(i, _features[i].$1, _features[i].$2),
+          const SizedBox(height: 8),
+        ]),
       ),
     );
   }
 
-  Widget _featureChip(int idx, IconData icon, String label) {
+  Widget _featureRailItem(int idx, IconData icon, String label) {
     final selected = _feature == idx;
     final scheme = Theme.of(context).colorScheme;
-    final fg = selected ? scheme.onPrimary : scheme.onSurfaceVariant;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant;
     return InkWell(
       onTap: () => setState(() => _feature = idx),
-      borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        width: double.infinity,
+        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
         decoration: BoxDecoration(
-          color: selected ? scheme.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-              color: selected ? scheme.primary : scheme.outlineVariant),
+          color: selected ? scheme.primaryContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 16, color: fg),
-          const SizedBox(width: 6),
+        child: Column(children: [
+          Icon(icon, size: 22, color: fg),
+          const SizedBox(height: 4),
           Text(label,
+              textAlign: TextAlign.center,
               style: TextStyle(
+                  fontSize: 11,
                   color: fg,
-                  fontSize: 13,
                   fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
         ]),
       ),
