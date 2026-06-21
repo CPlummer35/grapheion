@@ -151,7 +151,8 @@ class _HomePageState extends State<HomePage> {
   String? _error;
   bool _isMeshHost = false; // minted the key -> bootstraps the first admin
   int _peers = 0;
-  int _feature = 0; // selected top-bar feature (CSMP/SKED/CASREP/…)
+  int _feature = 0; // selected feature (CSMP/SKED/CASREP/…)
+  bool _featureOpen = false; // narrow layout: is a feature open (vs the menu)
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
   final Map<String, TransportLink?> _transport = {};
@@ -949,86 +950,156 @@ class _HomePageState extends State<HomePage> {
     // division, DH their department, 3MC the ship, the PE only TA'd jobs.
     final mine = _jobs.values.where((j) => _needsMyAction(j) && _canSee(j)).toList()
       ..sort((a, b) => a.priority.compareTo(b.priority));
-    final board = _jobs.values.where((j) => !j.isClosed && _canSee(j)).toList()
+    // PENDING = in routing (climbing the approval or close-out ladder);
+    // ACTIVE = approved + being worked (execution, or off-ship via TA).
+    final pending = _jobs.values
+        .where((j) =>
+            _canSee(j) &&
+            (j.phase == JobPhase.approval || j.phase == JobPhase.closeout))
+        .toList()
+      ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
+    final active = _jobs.values
+        .where((j) =>
+            _canSee(j) &&
+            (j.phase == JobPhase.execution || j.phase == JobPhase.ta))
+        .toList()
       ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
     final completed = _jobs.values.where((j) => j.isClosed && _canSee(j)).toList()
       ..sort((a, b) => b.updatedAtMs.compareTo(a.updatedAtMs));
 
     _peers = _node!.peerCount;
 
+    // Wide (macOS / tablet): vertical rail + content. Narrow (phone): a feature
+    // menu that opens each feature full-screen.
+    final wide = MediaQuery.of(context).size.width >= 600;
+    return wide
+        ? _wideHome(mine, pending, active, completed)
+        : _narrowHome(mine, pending, active, completed);
+  }
+
+  List<Widget> _appBarActions() => [
+        if (_account?.isAdmin ?? false)
+          IconButton(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => _AdminScreen(
+                accounts: _accounts.values.toList()
+                  ..sort((a, b) => a.name.compareTo(b.name)),
+                org: _org,
+                onCreate: _createAccount,
+                onUpdate: _updateAccount,
+              ),
+            )),
+            icon: const Icon(Icons.manage_accounts),
+            tooltip: 'Manage accounts',
+          ),
+        themeToggleButton(context),
+        PopupMenuButton<String>(
+          tooltip: 'Account',
+          onSelected: (v) {
+            if (v == 'signout') _signOut();
+            if (v == 'reset') _confirmReset(context);
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+                value: 'signout',
+                child: ListTile(
+                    leading: Icon(Icons.logout),
+                    title: Text('Sign out / switch user'))),
+            PopupMenuItem(
+                value: 'reset',
+                child: ListTile(
+                    leading: Icon(Icons.restart_alt),
+                    title: Text('Reset / leave mesh'))),
+          ],
+        ),
+      ];
+
+  /// The role / work-center / scope / peer-count strip under the app-bar title.
+  PreferredSizeWidget _headerBar() => PreferredSize(
+        preferredSize: const Size.fromHeight(34),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+          child: Row(children: [
+            _Badge(_role!.tag, off: _role!.offShip),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text('$_name · $_workcenter · sees ${scopeLabel(_role!)}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white)),
+            ),
+            const Spacer(),
+            Icon(Icons.hub,
+                size: 16, color: Colors.white.withValues(alpha: 0.9)),
+            const SizedBox(width: 4),
+            Text('$_peers', style: const TextStyle(color: Colors.white)),
+          ]),
+        ),
+      );
+
+  Widget _newJobFab() => FloatingActionButton.extended(
+        onPressed: _openCreate,
+        icon: const Icon(Icons.add),
+        label: const Text('New job'),
+      );
+
+  /// Wide layout: the vertical feature rail + content side by side.
+  Widget _wideHome(List<Job> mine, List<Job> pending, List<Job> active,
+      List<Job> completed) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Grapheion'),
-        actions: [
-          if (_account?.isAdmin ?? false)
-            IconButton(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => _AdminScreen(
-                  accounts: _accounts.values.toList()
-                    ..sort((a, b) => a.name.compareTo(b.name)),
-                  org: _org,
-                  onCreate: _createAccount,
-                  onUpdate: _updateAccount,
-                ),
-              )),
-              icon: const Icon(Icons.manage_accounts),
-              tooltip: 'Manage accounts',
-            ),
-          themeToggleButton(context),
-          PopupMenuButton<String>(
-            tooltip: 'Account',
-            onSelected: (v) {
-              if (v == 'signout') _signOut();
-              if (v == 'reset') _confirmReset(context);
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                  value: 'signout',
-                  child: ListTile(
-                      leading: Icon(Icons.logout),
-                      title: Text('Sign out / switch user'))),
-              PopupMenuItem(
-                  value: 'reset',
-                  child: ListTile(
-                      leading: Icon(Icons.restart_alt),
-                      title: Text('Reset / leave mesh'))),
-            ],
-          ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(34),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-            child: Row(children: [
-              _Badge(_role!.tag, off: _role!.offShip),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                    '$_name · $_workcenter · sees ${scopeLabel(_role!)}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white)),
-              ),
-              const Spacer(),
-              Icon(Icons.hub,
-                  size: 16, color: Colors.white.withValues(alpha: 0.9)),
-              const SizedBox(width: 4),
-              Text('$_peers', style: const TextStyle(color: Colors.white)),
-            ]),
-          ),
-        ),
+        actions: _appBarActions(),
+        bottom: _headerBar(),
       ),
-      floatingActionButton: _feature == 0
-          ? FloatingActionButton.extended(
-              onPressed: _openCreate,
-              icon: const Icon(Icons.add),
-              label: const Text('New job'),
-            )
-          : null,
+      floatingActionButton: _feature == 0 ? _newJobFab() : null,
       body: Row(children: [
         _featureRail(),
         const VerticalDivider(width: 1),
-        Expanded(child: _featureBody(mine, board, completed)),
+        Expanded(child: _featureBody(mine, pending, active, completed)),
       ]),
+    );
+  }
+
+  /// Narrow layout: a feature menu; tapping opens a feature full-screen (stays
+  /// in the widget tree, so it updates live; system back returns to the menu).
+  Widget _narrowHome(List<Job> mine, List<Job> pending, List<Job> active,
+      List<Job> completed) {
+    if (!_featureOpen) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Grapheion'),
+          actions: _appBarActions(),
+          bottom: _headerBar(),
+        ),
+        body: ListView(children: [
+          for (var i = 0; i < _features.length; i++)
+            ListTile(
+              leading: Icon(_features[i].$1),
+              title: Text(_features[i].$2),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => setState(() {
+                _feature = i;
+                _featureOpen = true;
+              }),
+            ),
+        ]),
+      );
+    }
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _featureOpen = false);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: BackButton(
+              onPressed: () => setState(() => _featureOpen = false)),
+          title: Text(_features[_feature].$2),
+          actions: _appBarActions(),
+        ),
+        floatingActionButton: _feature == 0 ? _newJobFab() : null,
+        body: _featureBody(mine, pending, active, completed),
+      ),
     );
   }
 
@@ -1089,10 +1160,11 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _featureBody(List<Job> mine, List<Job> board, List<Job> completed) {
+  Widget _featureBody(List<Job> mine, List<Job> pending, List<Job> active,
+      List<Job> completed) {
     switch (_feature) {
       case 0:
-        return _csmpView(mine, board, completed);
+        return _csmpView(mine, pending, active, completed);
       case 2:
         return _casrepPage();
       case 4:
@@ -1115,16 +1187,20 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// CSMP: the corrective-maintenance views (INBOX / BOARD / COMPLETED), as
-  /// tap-only sub-tabs (no horizontal swipe).
-  Widget _csmpView(List<Job> mine, List<Job> board, List<Job> completed) {
+  /// CSMP: the corrective-maintenance views as tap-only sub-tabs (no swipe).
+  /// INBOX = my action · PENDING = in routing · ACTIVE = approved/in work ·
+  /// COMPLETED = closed.
+  Widget _csmpView(List<Job> mine, List<Job> pending, List<Job> active,
+      List<Job> completed) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(children: [
         const TabBar(
+          labelPadding: EdgeInsets.symmetric(horizontal: 4),
           tabs: [
             Tab(text: 'INBOX'),
             Tab(text: 'PENDING'),
+            Tab(text: 'ACTIVE'),
             Tab(text: 'COMPLETED'),
           ],
         ),
@@ -1133,7 +1209,8 @@ class _HomePageState extends State<HomePage> {
             physics: const NeverScrollableScrollPhysics(),
             children: [
               _jobList(mine, emptyText: 'No jobs awaiting your action.'),
-              _jobList(board, emptyText: 'No active jobs. Originate one.'),
+              _jobList(pending, emptyText: 'Nothing in routing.'),
+              _jobList(active, emptyText: 'No approved jobs in work.'),
               _jobList(completed, emptyText: 'No closed jobs yet.'),
             ],
           ),
