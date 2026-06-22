@@ -17,6 +17,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:pointycastle/export.dart'
     show GCMBlockCipher, AESEngine, AEADParameters, KeyParameter;
 import 'package:flutter/services.dart';
@@ -73,30 +74,106 @@ Future<void> main() async {
   PeatFlutterNode.initialize();
   PeatNotifications.instance.init();
   final tm = (await SharedPreferences.getInstance()).getString('themeMode');
-  grapheionThemeMode.value = tm == 'light'
-      ? ThemeMode.light
-      : tm == 'dark'
-          ? ThemeMode.dark
-          : ThemeMode.system;
+  // Dark by default (the Defense Unicorns look) unless the user chose light.
+  grapheionThemeMode.value =
+      tm == 'light' ? ThemeMode.light : ThemeMode.dark;
   runApp(const GrapheionApp());
 }
 
-const _kSeed = Color(0xFF2E5E8C); // brand navy
+// Defense Unicorns brand palette (from defenseunicorns.com): deep navy fields,
+// electric-cyan accents/links, gold pill CTAs, an orange-red alert accent.
+const _duNavy = Color(0xFF00153F); // deep navy — page background
+const _duSurface = Color(0xFF021F49); // navy surface / cards
+const _duBlue = Color(0xFF002D82); // brand royal blue (raised blocks)
+const _duCyan = Color(0xFF1FDFFF); // electric cyan — accent / links / primary
+const _duGold = Color(0xFFF2AB44); // amber/gold — CTA buttons
+const _duGoldInk = Color(0xFF082935); // text on gold
+const _duOrange = Color(0xFFE53600); // orange-red — alert / tertiary accent
 
-/// App-wide theme mode (light/dark/system), toggled from the app bar and
-/// persisted. `system` by default, so it follows the OS until the user picks.
+final ColorScheme _duDark =
+    ColorScheme.fromSeed(seedColor: _duCyan, brightness: Brightness.dark)
+        .copyWith(
+  primary: _duCyan,
+  onPrimary: _duNavy,
+  secondary: _duGold,
+  onSecondary: _duGoldInk,
+  tertiary: _duOrange,
+  onTertiary: Colors.white,
+  surface: _duSurface,
+  onSurface: Colors.white,
+  surfaceContainerHighest: _duBlue,
+  error: _duOrange,
+);
+
+final ColorScheme _duLight =
+    ColorScheme.fromSeed(seedColor: _duBlue, brightness: Brightness.light)
+        .copyWith(
+  primary: _duBlue,
+  onPrimary: Colors.white,
+  secondary: _duGold,
+  onSecondary: _duGoldInk,
+  tertiary: _duOrange,
+);
+
+/// App-wide theme mode. Dark by default to match the Defense Unicorns look;
+/// toggled from the app bar and persisted.
 final ValueNotifier<ThemeMode> grapheionThemeMode =
-    ValueNotifier(ThemeMode.system);
+    ValueNotifier(ThemeMode.dark);
 
-ThemeData _grapheionTheme(Brightness brightness) => ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: _kSeed, brightness: brightness),
-      useMaterial3: true,
-      // Keep the brand navy app bar in both modes so the white header reads.
-      appBarTheme: const AppBarTheme(
-        backgroundColor: _kSeed,
-        foregroundColor: Colors.white,
+ThemeData _grapheionTheme(Brightness brightness) {
+  final dark = brightness == Brightness.dark;
+  final scheme = dark ? _duDark : _duLight;
+  final inter = GoogleFonts.interTextTheme();
+  // Teko (condensed display) for the big headings; Inter for everything else.
+  TextStyle? teko(TextStyle? s) =>
+      GoogleFonts.teko(textStyle: s, fontWeight: FontWeight.w600);
+  final text = inter.copyWith(
+    displayLarge: teko(inter.displayLarge),
+    displayMedium: teko(inter.displayMedium),
+    displaySmall: teko(inter.displaySmall),
+    headlineLarge: teko(inter.headlineLarge),
+    headlineMedium: teko(inter.headlineMedium),
+    headlineSmall: teko(inter.headlineSmall),
+  );
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: scheme,
+    textTheme: text,
+    scaffoldBackgroundColor: dark ? _duNavy : null,
+    // Deep-navy app bar in both modes (the white header strip reads on it).
+    appBarTheme: AppBarTheme(
+      backgroundColor: _duNavy,
+      foregroundColor: Colors.white,
+      titleTextStyle: GoogleFonts.teko(
+          fontSize: 28,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+          letterSpacing: 0.5),
+    ),
+    // Gold pill CTAs (the DU button look).
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: _duGold,
+        foregroundColor: _duGoldInk,
+        shape: const StadiumBorder(),
       ),
-    );
+    ),
+    floatingActionButtonTheme: const FloatingActionButtonThemeData(
+      backgroundColor: _duGold,
+      foregroundColor: _duGoldInk,
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+          foregroundColor: scheme.primary, shape: const StadiumBorder()),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(foregroundColor: scheme.primary),
+    ),
+    cardTheme: CardThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    ),
+  );
+}
 
 /// Flip between light and dark (resolving `system` to the current brightness),
 /// persisting the choice.
