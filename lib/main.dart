@@ -1873,7 +1873,7 @@ class _HomePageState extends State<HomePage> {
   /// can't all fit; content switches on tap — no swipe).
   Widget _featureRail() {
     return Container(
-      width: 94,
+      width: 78,
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
       child: SingleChildScrollView(
         child: Column(children: [
@@ -1894,19 +1894,21 @@ class _HomePageState extends State<HomePage> {
       onTap: () => setState(() => _feature = idx),
       child: Container(
         width: double.infinity,
-        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
+        margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 1),
         decoration: BoxDecoration(
           color: selected ? scheme.primaryContainer : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(children: [
-          _badgedIcon(icon, label, color: fg, size: 22),
-          const SizedBox(height: 4),
+          _badgedIcon(icon, label, color: fg, size: 26),
+          const SizedBox(height: 3),
           Text(label,
               textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 10.5,
                   color: fg,
                   fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
         ]),
