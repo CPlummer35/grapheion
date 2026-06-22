@@ -45,5 +45,21 @@ void main() {
       expect(acct.isAdmin, isTrue);
       expect(scopeForRole(Role.kratos), Scope.ship);
     });
+    test('binds to a device and round-trips that binding', () {
+      final k = Account(
+        id: 'a',
+        name: 'Kratos',
+        rate: '',
+        role: Role.kratos,
+        workcenterId: 'CP01',
+        pinSalt: 's',
+        pinHash: 'h',
+        boundNodeId: 'node-xyz',
+        createdAtMs: 0,
+      );
+      final back = Account.fromJson(k.toJson());
+      expect(back.boundNodeId, 'node-xyz');
+      expect(back.role, Role.kratos);
+    });
   });
 }
