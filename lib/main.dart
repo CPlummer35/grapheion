@@ -3364,8 +3364,8 @@ class _StartScreen extends StatelessWidget {
 /// A title that reveals a hidden action on 5 quick taps (within 3s) or a
 /// long-press — the discreet Kratos unlock trigger.
 class _SecretTitle extends StatefulWidget {
-  const _SecretTitle(this.text, {required this.onUnlock});
-  final String text;
+  const _SecretTitle({required this.child, required this.onUnlock});
+  final Widget child;
   final VoidCallback onUnlock;
   @override
   State<_SecretTitle> createState() => _SecretTitleState();
@@ -3396,7 +3396,7 @@ class _SecretTitleState extends State<_SecretTitle> {
         behavior: HitTestBehavior.opaque,
         onTap: _tap,
         onLongPress: widget.onUnlock,
-        child: Text(widget.text),
+        child: widget.child,
       );
 }
 
@@ -3460,6 +3460,7 @@ class _SignInScreen extends StatelessWidget {
                         workcenterId: wc,
                         pin: pin)),
                   ),
+                  _versionUnlock(context),
                 ],
               ),
             ),
@@ -3500,6 +3501,7 @@ class _SignInScreen extends StatelessWidget {
                 'Create your own profile — your admin can adjust it later'),
             onTap: () => _selfRegister(context),
           ),
+          _versionUnlock(context),
         ],
       ),
     );
@@ -3514,7 +3516,21 @@ class _SignInScreen extends StatelessWidget {
   /// The title — 5 quick taps (or a long-press) reveals the hidden Kratos
   /// unlock (god mode). Tap-count is far more reliable than long-press alone.
   Widget _kratosTitle(BuildContext context, String text) =>
-      _SecretTitle(text, onUnlock: () => _promptKratos(context));
+      _SecretTitle(onUnlock: () => _promptKratos(context), child: Text(text));
+
+  /// A discreet version label at the bottom of the sign-in screens — tap it 5×
+  /// (or long-press) to reveal the Kratos unlock. Unmistakable target, away
+  /// from the form; looks like an innocuous build string to anyone else.
+  Widget _versionUnlock(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 28, bottom: 10),
+        child: Center(
+          child: _SecretTitle(
+            onUnlock: () => _promptKratos(context),
+            child: Text('grapheion · build 2026.06',
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+          ),
+        ),
+      );
 
   void _promptKratos(BuildContext context) {
     final ctrl = TextEditingController();
