@@ -8,6 +8,7 @@ import 'package:grapheion/domain/casrep.dart';
 import 'package:grapheion/domain/chain.dart';
 import 'package:grapheion/domain/job.dart';
 import 'package:grapheion/domain/org.dart';
+import 'package:grapheion/domain/watch.dart';
 import 'package:grapheion/mesh_store.dart';
 
 Account _acct(String id, String name, Role role, {String wc = 'CP01'}) => Account(
@@ -150,6 +151,39 @@ void main() {
           jsonEncode(_acct('me', 'Me', Role.lpo).toJson()),
           remote: true);
       expect(store.account?.id, 'me', reason: 'auto-signed in on sync');
+    });
+  });
+
+  group('watchbill bill entries — last-write-wins (gossip oscillation guard)', () {
+    String id() => BillEntry.makeId(0, 'ev', 'r-poow', 's1');
+    String entryJson(String person, int t) => jsonEncode(BillEntry(
+          id: id(),
+          dayMs: 0,
+          evolutionId: 'ev',
+          roleId: 'r-poow',
+          shiftId: 's1',
+          personId: person,
+          updatedAtMs: t,
+        ).toJson());
+
+    test('a newer assignment wins over an older one', () {
+      store.applyDoc(kBill, id(), entryJson('alice', 100), remote: true);
+      store.applyDoc(kBill, id(), entryJson('bob', 200), remote: true);
+      expect(store.billAssignee(0, 'ev', 'r-poow', 's1'), 'bob');
+    });
+
+    test('a stale empty tombstone does NOT clobber a newer assignment', () {
+      // The bug: a re-gossiped older "unassigned" kept wiping a fresh assignment.
+      store.applyDoc(kBill, id(), entryJson('alice', 200), remote: true);
+      store.applyDoc(kBill, id(), entryJson('', 100), remote: true); // older empty
+      expect(store.billAssignee(0, 'ev', 'r-poow', 's1'), 'alice',
+          reason: 'older unassign must be ignored');
+    });
+
+    test('a newer unassign does clear an older assignment', () {
+      store.applyDoc(kBill, id(), entryJson('alice', 100), remote: true);
+      store.applyDoc(kBill, id(), entryJson('', 200), remote: true); // newer empty
+      expect(store.billAssignee(0, 'ev', 'r-poow', 's1'), '');
     });
   });
 }

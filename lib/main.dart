@@ -991,26 +991,22 @@ class _HomePageState extends State<HomePage> {
   void _setBillEntry(int dayMs, String evolutionId, String roleId,
       String shiftId, String? personId) {
     final id = BillEntry.makeId(dayMs, evolutionId, roleId, shiftId);
-    if (personId == null || personId.isEmpty) {
-      _store.bill.remove(id);
-      final tomb = jsonEncode({'id': id, 'personId': ''});
-      _node!.putRaw(kBill, id, tomb);
-      _bleBroadcast(kBill, id, tomb);
-    } else {
-      final e = BillEntry(
-        id: id,
-        dayMs: startOfDay(dayMs),
-        evolutionId: evolutionId,
-        roleId: roleId,
-        shiftId: shiftId,
-        personId: personId,
-        updatedAtMs: DateTime.now().millisecondsSinceEpoch,
-      );
-      final json = jsonEncode(e.toJson());
-      _store.bill[id] = e;
-      _node!.putRaw(kBill, id, json);
-      _bleBroadcast(kBill, id, json);
-    }
+    // An empty personId is an "unassigned" tombstone — but still a FULL entry
+    // with a real timestamp, kept in the map, so last-write-wins resolves it
+    // and the gossip re-broadcasts a consistent state (no oscillation).
+    final e = BillEntry(
+      id: id,
+      dayMs: startOfDay(dayMs),
+      evolutionId: evolutionId,
+      roleId: roleId,
+      shiftId: shiftId,
+      personId: personId ?? '',
+      updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    final json = jsonEncode(e.toJson());
+    _store.bill[id] = e;
+    _node!.putRaw(kBill, id, json);
+    _bleBroadcast(kBill, id, json);
     if (mounted) setState(() {});
   }
 
@@ -1022,19 +1018,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Auto-generate [ev]'s bill for [dayMs] from who's qualified — even load, no
-  /// overlapping double-booking. Replaces any existing entries.
+  /// overlapping double-booking. Writes every slot exactly once (its assignee,
+  /// or empty if nobody's eligible) so there's no clear-then-fill double-write.
   void _autoFillBill(Evolution ev, int dayMs) {
-    _clearBill(ev, dayMs);
+    final slots = evolutionSlots(ev);
     final fill = autoFillBill(
-      slots: evolutionSlots(ev),
+      slots: slots,
       people: _store.accounts.keys.toList(),
       isQualified: (p, st) => _store.isQualified(p, st),
     );
-    fill.forEach((slotKey, personId) {
-      final parts = slotKey.split('|');
-      _setBillEntry(dayMs, ev.id, parts[0], parts.length > 1 ? parts[1] : '',
-          personId);
-    });
+    for (final s in slots) {
+      _setBillEntry(dayMs, ev.id, s.roleId, s.shiftId, fill[s.key]);
+    }
   }
 
   /// Seed the default qualification tree — in-port watch stations + the SWO

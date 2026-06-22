@@ -131,8 +131,14 @@ class MeshStore {
         evolutions[docId] =
             Evolution.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       } else if (coll == kBill) {
-        bill[docId] =
-            BillEntry.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final e = BillEntry.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final old = bill[docId];
+        // Last-write-wins: a stale (older) update must not overwrite a newer
+        // one, or the BLE gossip oscillates — two devices that disagree on a
+        // slot keep clobbering each other every cycle (assigned↔unassigned).
+        if (old == null || e.updatedAtMs >= old.updatedAtMs) {
+          bill[docId] = e;
+        }
       } else if (coll == kFeedback) {
         final note =
             FeedbackNote.fromJson(jsonDecode(raw) as Map<String, dynamic>);
