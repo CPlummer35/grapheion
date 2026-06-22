@@ -30,7 +30,8 @@ const kCasreps = 'casreps';
 const kPmsChecks = 'pmschecks'; // SKED / PMS checks
 const kQualifications = 'qualifications'; // qual tree nodes (watch/knowledge/…)
 const kQuals = 'quals'; // PQS progress (person x qualification)
-const kWatchbill = 'watchbill'; // watch assignments (day x station x period)
+const kEvolutions = 'evolutions'; // evolutions (role sets, e.g. In-Port Duty)
+const kBill = 'watchbill'; // bill entries (day x evolution x role x shift)
 const kFeedback = 'feedback'; // demo feedback (anyone writes, only Kratos reads)
 
 /// A peer seen on the mesh, from its presence beat.
@@ -62,7 +63,8 @@ class MeshStore {
   final Map<String, PmsCheck> pmsChecks = {};
   final Map<String, Qualification> qualifications = {};
   final Map<String, PersonQual> quals = {}; // keyed by PersonQual.makeId
-  final Map<String, WatchAssignment> watchbill = {};
+  final Map<String, Evolution> evolutions = {};
+  final Map<String, BillEntry> bill = {}; // keyed by BillEntry.makeId
   final Map<String, FeedbackNote> feedback = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
@@ -125,9 +127,12 @@ class MeshStore {
       } else if (coll == kQuals) {
         quals[docId] =
             PersonQual.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-      } else if (coll == kWatchbill) {
-        watchbill[docId] =
-            WatchAssignment.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kEvolutions) {
+        evolutions[docId] =
+            Evolution.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kBill) {
+        bill[docId] =
+            BillEntry.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       } else if (coll == kFeedback) {
         final note =
             FeedbackNote.fromJson(jsonDecode(raw) as Map<String, dynamic>);
@@ -185,8 +190,11 @@ class MeshStore {
       .toSet();
 
   /// Who is posted to [qualId]/[period] on [dayMs] (null if unassigned).
-  String? watchAssignee(int dayMs, String qualId, WatchPeriod period) =>
-      watchbill[WatchAssignment.makeId(dayMs, qualId, period)]?.personId;
+  /// Who is posted to [roleId]/[shiftId] on [dayMs]'s instance of [evolutionId]
+  /// (null/'' if unassigned).
+  String? billAssignee(
+          int dayMs, String evolutionId, String roleId, String shiftId) =>
+      bill[BillEntry.makeId(dayMs, evolutionId, roleId, shiftId)]?.personId;
 
   void applyOrg(String coll, String raw) {
     try {
@@ -345,7 +353,8 @@ class MeshStore {
     pmsChecks.clear();
     qualifications.clear();
     quals.clear();
-    watchbill.clear();
+    evolutions.clear();
+    bill.clear();
     feedback.clear();
     org.departments.clear();
     org.divisions.clear();

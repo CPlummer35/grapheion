@@ -247,7 +247,6 @@ class _HomePageState extends State<HomePage> {
   int _feature = 0; // selected feature (CSMP/SKED/CASREP/…)
   bool _featureOpen = false; // narrow layout: is a feature open (vs the menu)
   int _watchDayOffset = 0; // watchbill: days from today
-  WatchPeriod _watchPeriod = WatchPeriod.forenoon; // watchbill: selected period
   final ValueNotifier<int> _feedbackTick = ValueNotifier(0); // refreshes open feedback sheet
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
@@ -534,8 +533,11 @@ class _HomePageState extends State<HomePage> {
           for (final q in _store.quals.values) {
             _bleBroadcast(kQuals, q.id, jsonEncode(q.toJson()));
           }
-          for (final a in _store.watchbill.values) {
-            _bleBroadcast(kWatchbill, a.id, jsonEncode(a.toJson()));
+          for (final e in _store.evolutions.values) {
+            _bleBroadcast(kEvolutions, e.id, jsonEncode(e.toJson()));
+          }
+          for (final a in _store.bill.values) {
+            _bleBroadcast(kBill, a.id, jsonEncode(a.toJson()));
           }
           for (final f in _store.feedback.values) {
             _bleBroadcast(kFeedback, f.id, jsonEncode(f.toJson()));
@@ -900,7 +902,8 @@ class _HomePageState extends State<HomePage> {
       kPmsChecks,
       kQualifications,
       kQuals,
-      kWatchbill,
+      kEvolutions,
+      kBill,
       kFeedback,
     ]) {
       for (final id in node.listDocuments(coll)) {
@@ -975,29 +978,63 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() {});
   }
 
-  /// Post (or clear, if [personId] is null) a person to a watch on the bill.
-  void _setWatch(
-      int dayMs, String qualId, WatchPeriod period, String? personId) {
-    final id = WatchAssignment.makeId(dayMs, qualId, period);
-    if (personId == null) {
-      _store.watchbill.remove(id);
-      _node!.putRaw(kWatchbill, id, jsonEncode({'id': id, 'personId': ''}));
-      _bleBroadcast(kWatchbill, id, jsonEncode({'id': id, 'personId': ''}));
+  void _saveEvolution(Evolution e) {
+    final json = jsonEncode(e.toJson());
+    _store.evolutions[e.id] = e;
+    _node!.putRaw(kEvolutions, e.id, json);
+    _bleBroadcast(kEvolutions, e.id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// Post (or clear, if [personId] is null) a person to a role/shift on a day's
+  /// instance of an evolution, and sync it.
+  void _setBillEntry(int dayMs, String evolutionId, String roleId,
+      String shiftId, String? personId) {
+    final id = BillEntry.makeId(dayMs, evolutionId, roleId, shiftId);
+    if (personId == null || personId.isEmpty) {
+      _store.bill.remove(id);
+      final tomb = jsonEncode({'id': id, 'personId': ''});
+      _node!.putRaw(kBill, id, tomb);
+      _bleBroadcast(kBill, id, tomb);
     } else {
-      final a = WatchAssignment(
+      final e = BillEntry(
         id: id,
         dayMs: startOfDay(dayMs),
-        qualId: qualId,
-        period: period,
+        evolutionId: evolutionId,
+        roleId: roleId,
+        shiftId: shiftId,
         personId: personId,
         updatedAtMs: DateTime.now().millisecondsSinceEpoch,
       );
-      final json = jsonEncode(a.toJson());
-      _store.watchbill[id] = a;
-      _node!.putRaw(kWatchbill, id, json);
-      _bleBroadcast(kWatchbill, id, json);
+      final json = jsonEncode(e.toJson());
+      _store.bill[id] = e;
+      _node!.putRaw(kBill, id, json);
+      _bleBroadcast(kBill, id, json);
     }
     if (mounted) setState(() {});
+  }
+
+  /// Clear every slot on [ev]'s bill for [dayMs].
+  void _clearBill(Evolution ev, int dayMs) {
+    for (final s in evolutionSlots(ev)) {
+      _setBillEntry(dayMs, ev.id, s.roleId, s.shiftId, null);
+    }
+  }
+
+  /// Auto-generate [ev]'s bill for [dayMs] from who's qualified — even load, no
+  /// overlapping double-booking. Replaces any existing entries.
+  void _autoFillBill(Evolution ev, int dayMs) {
+    _clearBill(ev, dayMs);
+    final fill = autoFillBill(
+      slots: evolutionSlots(ev),
+      people: _store.accounts.keys.toList(),
+      isQualified: (p, st) => _store.isQualified(p, st),
+    );
+    fill.forEach((slotKey, personId) {
+      final parts = slotKey.split('|');
+      _setBillEntry(dayMs, ev.id, parts[0], parts.length > 1 ? parts[1] : '',
+          personId);
+    });
   }
 
   /// Seed the default qualification tree — in-port watch stations + the SWO
@@ -1066,6 +1103,48 @@ class _HomePageState extends State<HomePage> {
         order: i,
       ));
     }
+    _seedInPortEvolution();
+  }
+
+  /// Seed the In-Port Duty evolution — the day-to-day in-port watchbill: a few
+  /// standing watches + rotating watches across 5 section shifts. Stable id.
+  void _seedInPortEvolution() {
+    // roleId, stationId, name, rotating
+    final roles = <(String, String, String, bool)>[
+      ('r-cdo', 'q-cdo', 'Command Duty Officer', false),
+      ('r-oodip', 'q-oodip', 'Officer of the Deck (In-Port)', false),
+      ('r-dutyeng', 'q-dutyeng', 'Duty Engineer', false),
+      ('r-poow', 'q-poow', 'Petty Officer of the Watch', true),
+      ('r-moow', 'q-moow', 'Messenger of the Watch', true),
+      ('r-sns', 'q-sns', 'Sounding & Security Patrol', true),
+      ('r-sec', 'q-sec', 'Roving Security Patrol', true),
+    ];
+    const times = [
+      ('s1', '1', '0630', '1130'),
+      ('s2', '2', '1130', '1630'),
+      ('s3', '3', '1630', '2130'),
+      ('s4', '4', '2130', '0130'),
+      ('s5', '5', '0130', '0630'),
+    ];
+    _saveEvolution(Evolution(
+      id: 'ev-inport',
+      name: 'In-Port Duty',
+      inPort: true,
+      order: 0,
+      shifts: [
+        for (final t in times)
+          WatchShift(id: t.$1, label: t.$2, start: t.$3, end: t.$4)
+      ],
+      roles: [
+        for (var i = 0; i < roles.length; i++)
+          EvolutionRole(
+              id: roles[i].$1,
+              stationId: roles[i].$2,
+              name: roles[i].$3,
+              rotating: roles[i].$4,
+              order: i)
+      ],
+    ));
   }
 
   /// Work-center members as (accountId, name), for assignment + quals.
@@ -1857,7 +1936,8 @@ class _HomePageState extends State<HomePage> {
     (Icons.construction, 'CSMP'),
     (Icons.calendar_month, 'SKED'),
     (Icons.warning_amber, 'CASREP'),
-    (Icons.groups, 'Watchbills'),
+    (Icons.event_note, 'Watchbills'),
+    (Icons.workspace_premium, 'PQS'),
     (Icons.hub, 'Connection'),
     (Icons.inventory_2, 'Supply'),
     (Icons.school, 'Training'),
@@ -1929,7 +2009,9 @@ class _HomePageState extends State<HomePage> {
       case 'Connection':
         return _connectionsPage();
       case 'Watchbills':
-        return _watchPage();
+        return _watchbillPage();
+      case 'PQS':
+        return _pqsPage();
       case 'Feedback':
         return _feedbackPage();
       case 'Supply':
@@ -2002,60 +2084,46 @@ class _HomePageState extends State<HomePage> {
     QualStage.notStarted: Colors.grey,
   };
 
-  Widget _watchPage() {
-    return DefaultTabController(
-      length: 2,
-      child: Column(children: [
-        const TabBar(tabs: [Tab(text: 'BILL'), Tab(text: 'PQS')]),
-        Expanded(
-          child: TabBarView(
-            physics: const NeverScrollableScrollPhysics(),
-            children: [_watchBillView(), _pqsView()],
-          ),
-        ),
-      ]),
-    );
-  }
-
-  /// In-port watchbill for one day + watch period: a row per station with its
-  /// posted watchstander (only qualified people can be posted).
-  Widget _watchBillView() {
-    final stations = _store.qualifications.values
-        .where((q) => q.isWatchStation && q.inPort)
-        .toList()
+  /// Watchbills — fill the roles an evolution requires for a day. In port the
+  /// evolution is the day-to-day duty: standing watches + rotating section
+  /// shifts. Only PQS-qualified people can be posted; auto-generate fills it.
+  Widget _watchbillPage() {
+    final evos = _store.evolutions.values.toList()
       ..sort((a, b) => a.order.compareTo(b.order));
-    if (stations.isEmpty) {
+    if (evos.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('No in-port watch stations yet.',
+            const Text('No watchbill set up yet.',
                 style: TextStyle(color: Colors.grey)),
             if (_canManageWatch) ...[
               const SizedBox(height: 16),
               OutlinedButton.icon(
                 onPressed: _seedQualifications,
                 icon: const Icon(Icons.anchor),
-                label: const Text('Load default stations + SWO quals'),
+                label: const Text('Load In-Port Duty + stations'),
               ),
             ],
           ]),
         ),
       );
     }
+    final ev = evos.first; // one evolution (In-Port Duty) for now
     final day = startOfDay(DateTime.now().millisecondsSinceEpoch) +
         _watchDayOffset * 86400000;
+    final roles = ev.roles.toList()..sort((a, b) => a.order.compareTo(b.order));
     return Column(children: [
-      // Day stepper.
       Row(children: [
         IconButton(
             onPressed: () => setState(() => _watchDayOffset--),
             icon: const Icon(Icons.chevron_left)),
         Expanded(
-          child: Center(
-            child: Text('${weekdayLabel(day)}  ${_shortDate(day)}',
-                style: Theme.of(context).textTheme.titleMedium),
-          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(ev.name, style: Theme.of(context).textTheme.titleMedium),
+            Text('${weekdayLabel(day)}  ${_shortDate(day)}',
+                style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          ]),
         ),
         IconButton(
             onPressed: () => setState(() => _watchDayOffset++),
@@ -2065,64 +2133,115 @@ class _HomePageState extends State<HomePage> {
               onPressed: () => setState(() => _watchDayOffset = 0),
               child: const Text('Today')),
       ]),
-      // Period selector.
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Wrap(
-          spacing: 6,
-          children: [
-            for (final p in WatchPeriod.values)
-              ChoiceChip(
-                label: Text(p.label),
-                selected: _watchPeriod == p,
-                onSelected: (_) => setState(() => _watchPeriod = p),
-              ),
-          ],
+      if (_canManageWatch)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+          child: Row(children: [
+            FilledButton.tonalIcon(
+              onPressed: () => _autoFillBill(ev, day),
+              icon: const Icon(Icons.auto_fix_high, size: 18),
+              label: const Text('Auto-generate'),
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: () => _clearBill(ev, day),
+              icon: const Icon(Icons.clear_all, size: 18),
+              label: const Text('Clear'),
+            ),
+          ]),
         ),
-      ),
-      Padding(
-        padding: const EdgeInsets.only(top: 4, bottom: 2),
-        child: Text(_watchPeriod.range,
-            style: const TextStyle(color: Colors.grey, fontSize: 12)),
-      ),
       const Divider(height: 1),
       Expanded(
         child: ListView(children: [
-          for (final s in stations)
-            _watchBillRow(day, s, _watchPeriod),
+          for (final r in roles)
+            if (r.rotating)
+              _billRotatingGroup(day, ev, r)
+            else
+              _billSlotTile(day, ev, r, '', r.name, 'whole day'),
         ]),
       ),
     ]);
   }
 
-  Widget _watchBillRow(int day, Qualification s, WatchPeriod period) {
-    final assignee = _store.watchAssignee(day, s.id, period);
-    final unqualified =
-        assignee != null && !_store.isQualified(assignee, s.id);
+  /// A rotating role — a header + one row per section shift.
+  Widget _billRotatingGroup(int day, Evolution ev, EvolutionRole r) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        color: scheme.surfaceContainerHighest,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child:
+            Text(r.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ),
+      for (final s in ev.shifts)
+        _billSlotTile(day, ev, r, s.id, 'Sec ${s.label}', '${s.start}-${s.end}'),
+    ]);
+  }
+
+  /// One fillable bill slot (a standing role, or one shift of a rotating role).
+  Widget _billSlotTile(int day, Evolution ev, EvolutionRole r, String shiftId,
+      String label, String sub) {
+    final pid = _store.billAssignee(day, ev.id, r.id, shiftId);
+    final unqual =
+        pid != null && pid.isNotEmpty && !_store.isQualified(pid, r.stationId);
     return ListTile(
-      leading: CircleAvatar(
-          radius: 16,
-          child: Text(s.abbr.length > 4 ? s.abbr.substring(0, 4) : s.abbr,
-              style: const TextStyle(fontSize: 10))),
-      title: Text(s.name),
-      subtitle: assignee == null
+      dense: true,
+      leading: SizedBox(
+        width: 58,
+        child: Text(label,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      ),
+      title: (pid == null || pid.isEmpty)
           ? const Text('— unassigned', style: TextStyle(color: Colors.grey))
-          : Text(_personName(assignee),
-              style: TextStyle(
-                  color: unqualified ? _duOrange : null,
-                  fontWeight: FontWeight.w600)),
-      trailing: _canManageWatch
-          ? const Icon(Icons.person_add_alt, size: 20)
+          : Row(children: [
+              Flexible(
+                child: Text(_billPersonLabel(pid),
+                    style: TextStyle(
+                        color: unqual ? _duOrange : null,
+                        fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(width: 6),
+              _qualMark(pid, r.stationId),
+            ]),
+      subtitle: Text(sub, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+      trailing: _canManageWatch ? const Icon(Icons.edit, size: 18) : null,
+      onTap: _canManageWatch
+          ? () => _openBillAssign(day, ev, r, shiftId, label)
           : null,
-      onTap:
-          _canManageWatch ? () => _openWatchAssign(day, s, period) : null,
     );
   }
 
-  void _openWatchAssign(int day, Qualification s, WatchPeriod period) {
-    final qualified = _store.qualifiedFor(s.id)
-      ..sort((a, b) => _personName(a).compareTo(_personName(b)));
-    final current = _store.watchAssignee(day, s.id, period);
+  /// A person on the bill — rate + name (a watchbill is a roster, names show).
+  String _billPersonLabel(String pid) {
+    final a = _store.accounts[pid];
+    if (a == null) return pid;
+    return a.rate.isEmpty ? a.name : '${a.rate} ${a.name}';
+  }
+
+  /// QUAL marker per the bill legend (Q / I / UI / N).
+  Widget _qualMark(String pid, String stationId) {
+    final (txt, color) = switch (_store.qualStage(pid, stationId)) {
+      QualStage.qualified => ('Q', Colors.green),
+      QualStage.boardPending => ('I', Colors.blue),
+      QualStage.inProgress => ('UI', Colors.orange),
+      QualStage.notStarted => ('N', Colors.grey),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+          border: Border.all(color: color),
+          borderRadius: BorderRadius.circular(4)),
+      child: Text(txt,
+          style: TextStyle(
+              color: color, fontSize: 10, fontWeight: FontWeight.w700)),
+    );
+  }
+
+  void _openBillAssign(
+      int day, Evolution ev, EvolutionRole r, String shiftId, String slot) {
+    final qualified = _store.qualifiedFor(r.stationId)
+      ..sort((a, b) => _billPersonLabel(a).compareTo(_billPersonLabel(b)));
+    final current = _store.billAssignee(day, ev.id, r.id, shiftId);
     showModalBottomSheet(
       context: context,
       builder: (ctx) => SafeArea(
@@ -2130,7 +2249,7 @@ class _HomePageState extends State<HomePage> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('${s.abbr} · ${period.label}  ${period.range}',
+              child: Text('${r.name} · $slot',
                   style: Theme.of(ctx).textTheme.titleMedium),
             ),
             if (qualified.isEmpty)
@@ -2142,21 +2261,21 @@ class _HomePageState extends State<HomePage> {
             for (final pid in qualified)
               ListTile(
                 leading: const Icon(Icons.person),
-                title: Text(_personName(pid)),
+                title: Text(_billPersonLabel(pid)),
                 trailing: current == pid
                     ? const Icon(Icons.check, color: Colors.green)
                     : null,
                 onTap: () {
-                  _setWatch(day, s.id, period, pid);
+                  _setBillEntry(day, ev.id, r.id, shiftId, pid);
                   Navigator.pop(ctx);
                 },
               ),
-            if (current != null)
+            if (current != null && current.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.clear),
                 title: const Text('Unassign'),
                 onTap: () {
-                  _setWatch(day, s.id, period, null);
+                  _setBillEntry(day, ev.id, r.id, shiftId, null);
                   Navigator.pop(ctx);
                 },
               ),
@@ -2168,7 +2287,7 @@ class _HomePageState extends State<HomePage> {
 
   /// PQS — each work-center member's progress across the whole qualification
   /// tree (designations first, then watch stations, knowledge, letters).
-  Widget _pqsView() {
+  Widget _pqsPage() {
     final quals = _store.qualifications.values.toList()..sort(_qualSort);
     final people = _watchPeople();
     if (quals.isEmpty) {

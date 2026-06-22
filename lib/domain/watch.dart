@@ -54,53 +54,6 @@ String qualStageToken(QualStage q) => q.name;
 QualStage qualStageFromToken(String s) => QualStage.values
     .firstWhere((q) => q.name == s, orElse: () => QualStage.notStarted);
 
-/// In-port watch periods — 4-hour, with the 1600-2000 dog split so the rotation
-/// shifts by a period each day.
-enum WatchPeriod { mid, morning, forenoon, afternoon, dog1, dog2, evening }
-
-extension WatchPeriodInfo on WatchPeriod {
-  String get label {
-    switch (this) {
-      case WatchPeriod.mid:
-        return 'Mid';
-      case WatchPeriod.morning:
-        return 'Morning';
-      case WatchPeriod.forenoon:
-        return 'Forenoon';
-      case WatchPeriod.afternoon:
-        return 'Afternoon';
-      case WatchPeriod.dog1:
-        return '1st Dog';
-      case WatchPeriod.dog2:
-        return '2nd Dog';
-      case WatchPeriod.evening:
-        return 'Evening';
-    }
-  }
-
-  String get range {
-    switch (this) {
-      case WatchPeriod.mid:
-        return '0000-0400';
-      case WatchPeriod.morning:
-        return '0400-0800';
-      case WatchPeriod.forenoon:
-        return '0800-1200';
-      case WatchPeriod.afternoon:
-        return '1200-1600';
-      case WatchPeriod.dog1:
-        return '1600-1800';
-      case WatchPeriod.dog2:
-        return '1800-2000';
-      case WatchPeriod.evening:
-        return '2000-2400';
-    }
-  }
-}
-
-String watchPeriodToken(WatchPeriod p) => p.name;
-WatchPeriod watchPeriodFromToken(String s) => WatchPeriod.values
-    .firstWhere((p) => p.name == s, orElse: () => WatchPeriod.mid);
 
 /// A qualification definition — a node in the qual tree.
 class Qualification {
@@ -195,48 +148,6 @@ class PersonQual {
         percent: (j['percent'] ?? 0) as int,
         hoursLogged: (j['hoursLogged'] ?? 0) as int,
         qualifier: (j['qualifier'] ?? false) as bool,
-        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
-      );
-}
-
-/// One watchbill cell: a person posted to a station for a watch period on a
-/// given (in-port) day. The station is a watch-station Qualification.
-class WatchAssignment {
-  final String id; // "{dayMs}|{qualId}|{period}"
-  final int dayMs;
-  final String qualId; // the watch-station qualification's id
-  final WatchPeriod period;
-  String personId;
-  int updatedAtMs;
-
-  WatchAssignment({
-    required this.id,
-    required this.dayMs,
-    required this.qualId,
-    required this.period,
-    required this.personId,
-    required this.updatedAtMs,
-  });
-
-  static String makeId(int dayMs, String qualId, WatchPeriod period) =>
-      '${startOfDay(dayMs)}|$qualId|${period.name}';
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'dayMs': dayMs,
-        'qualId': qualId,
-        'period': watchPeriodToken(period),
-        'personId': personId,
-        'updatedAtMs': updatedAtMs,
-      };
-
-  factory WatchAssignment.fromJson(Map<String, dynamic> j) => WatchAssignment(
-        id: j['id'] as String,
-        dayMs: (j['dayMs'] ?? 0) as int,
-        // Back-compat: v1 keyed this as 'stationId'.
-        qualId: (j['qualId'] ?? j['stationId'] ?? '') as String,
-        period: watchPeriodFromToken((j['period'] ?? 'mid') as String),
-        personId: (j['personId'] ?? '') as String,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );
 }

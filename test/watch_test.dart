@@ -28,27 +28,17 @@ PersonQual _pq(String person, String qual, QualStage stage,
 
 void main() {
   group('enums round-trip', () {
-    test('type / stage / period tokens', () {
+    test('type / stage tokens', () {
       for (final t in QualType.values) {
         expect(qualTypeFromToken(qualTypeToken(t)), t);
       }
       for (final s in QualStage.values) {
         expect(qualStageFromToken(qualStageToken(s)), s);
       }
-      for (final p in WatchPeriod.values) {
-        expect(watchPeriodFromToken(watchPeriodToken(p)), p);
-      }
       expect(qualStageFromToken('bogus'), QualStage.notStarted);
     });
   });
 
-  group('watch periods', () {
-    test('labels + ranges', () {
-      expect(WatchPeriod.mid.range, '0000-0400');
-      expect(WatchPeriod.dog1.label, '1st Dog');
-      expect(WatchPeriod.evening.range, '2000-2400');
-    });
-  });
 
   group('Qualification', () {
     test('round-trips with type, prereqs, hours', () {
@@ -110,21 +100,6 @@ void main() {
     });
   });
 
-  group('WatchAssignment', () {
-    test('id keyed by day-start/qual/period; legacy stationId reads back', () {
-      final day = DateTime(2026, 6, 20, 13).millisecondsSinceEpoch;
-      expect(WatchAssignment.makeId(day, 'poow', WatchPeriod.morning),
-          '${startOfDay(day)}|poow|morning');
-      final back = WatchAssignment.fromJson({
-        'id': 'x',
-        'dayMs': day,
-        'stationId': 'poow', // v1 key
-        'period': 'mid',
-        'personId': 'acct-1',
-      });
-      expect(back.qualId, 'poow');
-    });
-  });
 
   group('evolution + watchbill', () {
     Evolution ev() => Evolution(
