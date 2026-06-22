@@ -1757,6 +1757,8 @@ class _HomePageState extends State<HomePage> {
 
   Widget _newJobFab() => FloatingActionButton.extended(
         onPressed: _openCreate,
+        backgroundColor: _duOrange, // DU orange-red for the New Job box
+        foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text('New job'),
       );
@@ -2105,7 +2107,7 @@ class _HomePageState extends State<HomePage> {
           ? const Text('— unassigned', style: TextStyle(color: Colors.grey))
           : Text(_personName(assignee),
               style: TextStyle(
-                  color: unqualified ? Colors.red : null,
+                  color: unqualified ? _duOrange : null,
                   fontWeight: FontWeight.w600)),
       trailing: _canManageWatch
           ? const Icon(Icons.person_add_alt, size: 20)
@@ -2323,7 +2325,7 @@ class _HomePageState extends State<HomePage> {
   // --- SKED (PMS schedule) page --------------------------------------------
 
   static const _skedColors = {
-    PmsStatus.overdue: Colors.red,
+    PmsStatus.overdue: _duOrange,
     PmsStatus.due: Colors.orange,
     PmsStatus.scheduled: Colors.green,
   };
@@ -2407,7 +2409,7 @@ class _HomePageState extends State<HomePage> {
       case SchedOutcome.done:
         return Colors.green;
       case SchedOutcome.missed:
-        return Colors.red;
+        return _duOrange;
       case SchedOutcome.upcoming:
         return Colors.orange;
     }
@@ -2903,7 +2905,7 @@ class _HomePageState extends State<HomePage> {
             color: cancelled
                 ? Colors.grey
                 : c.type == CasrepType.initial
-                    ? Colors.red.shade700
+                    ? _duOrange
                     : Colors.orange.shade700,
           ),
           onTap: () => _openCasrepDetail(c),
@@ -2936,7 +2938,7 @@ class _HomePageState extends State<HomePage> {
                   color: c.type == CasrepType.cancel
                       ? Colors.grey
                       : c.type == CasrepType.initial
-                          ? Colors.red.shade700
+                          ? _duOrange
                           : Colors.orange.shade700),
             ]),
             const SizedBox(height: 4),
@@ -2995,7 +2997,7 @@ class _HomePageState extends State<HomePage> {
                   icon: const Icon(Icons.cancel_outlined),
                   label: const Text('Cancel'),
                   style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.red),
+                      foregroundColor: _duOrange),
                 ),
               ]),
             ],
@@ -4201,7 +4203,7 @@ class _AccountFormState extends State<_AccountForm> {
         if (_err != null)
           Padding(
             padding: const EdgeInsets.only(top: 12),
-            child: Text(_err!, style: const TextStyle(color: Colors.red)),
+            child: Text(_err!, style: const TextStyle(color: _duOrange)),
           ),
         const SizedBox(height: 20),
         FilledButton(onPressed: _submit, child: Text(widget.submitLabel)),
@@ -4263,7 +4265,7 @@ class _PriorityDot extends StatelessWidget {
   final int priority;
   @override
   Widget build(BuildContext context) {
-    const colors = {1: Colors.red, 2: Colors.orange, 3: Colors.amber, 4: Colors.green};
+    const colors = {1: _duOrange, 2: Colors.orange, 3: Colors.amber, 4: Colors.green};
     return CircleAvatar(
       radius: 6,
       backgroundColor: colors[priority] ?? Colors.grey,
