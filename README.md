@@ -85,6 +85,13 @@ compartment with no network still converge.
 - *Scaffolded, awaiting fidelity:* PQS **line-items** (100/200/300), **duty-
   section** rotation, and the **underway** bill are the next depth passes.
 
+### Demo feedback
+- Anyone trying the demo can tap the **feedback** button in the app bar on any
+  screen and send a quick note — captured with the feature they were on — which
+  **syncs over the mesh (including the relay)**, so it reaches the demo owner
+  even when the phone is on cellular. Lets you gather impressions live while
+  people tap through the app.
+
 ### Mesh / Connection
 - **QR-gated join** — the DIVO hosts the mesh: it mints a formation key carried
   in a join QR. Everyone else scans that QR once to join (key + host remembered,
@@ -121,7 +128,7 @@ state.
 Synced state and the inbound-apply / visibility / notification logic live in a
 pure, node-free **`MeshStore`** (`lib/mesh_store.dart`); the widget reads it
 through thin getters and delegates to it. That keeps the logic unit-testable: a
-host-run **`flutter test`** suite (~75 tests, sub-second — job lifecycle,
+host-run **`flutter test`** suite (~88 tests, sub-second — job lifecycle,
 role-scoped visibility, CASREP categories, the PMS periodicity/MIP-MRC/schedule
 model, serialization, and a UI smoke test) is the regression net. Run it before
 changes.
@@ -208,10 +215,10 @@ appears on the other over Bluetooth.
 Proof-of-concept, running on **macOS, iOS, and Android**. Working: the full
 corrective-maintenance (CSMP) job lifecycle, preventive PMS (SKED) with the
 drag-and-drop weekly schedule, CASREP-from-priority, the in-port watchbill +
-PQS qualification tree (incl. SWO prerequisites), org-scoped visibility,
-QR-gated join, role switching, notifications, a dual Iroh + BLE transport (BLE
-AES-256-GCM encrypted, both transports formation-key gated), and an ~84-test
-host-run regression suite.
+PQS qualification tree (incl. SWO prerequisites), in-app demo feedback over the
+mesh, org-scoped visibility, QR-gated join, role switching, notifications, a
+dual Iroh + BLE transport (BLE AES-256-GCM encrypted, both transports
+formation-key gated), and an ~88-test host-run regression suite.
 
 Not done / not for operational use:
 
