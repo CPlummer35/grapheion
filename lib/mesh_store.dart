@@ -129,8 +129,18 @@ class MeshStore {
         watchbill[docId] =
             WatchAssignment.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       } else if (coll == kFeedback) {
-        feedback[docId] =
+        final note =
             FeedbackNote.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        if (note.text.isEmpty) {
+          feedback.remove(docId); // tombstone — a delete
+        } else {
+          final isNew = !feedback.containsKey(docId);
+          feedback[docId] = note;
+          // Only Kratos reads feedback — alert it when a new note lands.
+          if (remote && isNew && !note.read && role == Role.kratos) {
+            onNotify('New feedback', '${note.fromName}: ${note.text}', peer);
+          }
+        }
       }
     } catch (_) {}
   }

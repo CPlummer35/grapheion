@@ -1435,6 +1435,15 @@ class _HomePageState extends State<HomePage> {
         label: const Text('New job'),
       );
 
+  /// A feature icon, with an unread-count badge on the Feedback item (Kratos).
+  Widget _badgedIcon(IconData icon, String label, {Color? color, double? size}) {
+    final base = Icon(icon, color: color, size: size);
+    if (label == 'Feedback' && _store.unreadFeedback > 0) {
+      return Badge.count(count: _store.unreadFeedback, child: base);
+    }
+    return base;
+  }
+
   /// The action button for the current feature (CSMP → new job, SKED → add
   /// check), or none.
   Widget? _featureFab() {
@@ -1486,7 +1495,7 @@ class _HomePageState extends State<HomePage> {
         body: ListView(children: [
           for (var i = 0; i < _navFeatures.length; i++)
             ListTile(
-              leading: Icon(_navFeatures[i].$1),
+              leading: _badgedIcon(_navFeatures[i].$1, _navFeatures[i].$2),
               title: Text(_navFeatures[i].$2),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => setState(() {
@@ -1564,7 +1573,7 @@ class _HomePageState extends State<HomePage> {
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(children: [
-          Icon(icon, size: 22, color: fg),
+          _badgedIcon(icon, label, color: fg, size: 22),
           const SizedBox(height: 4),
           Text(label,
               textAlign: TextAlign.center,
