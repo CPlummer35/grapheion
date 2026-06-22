@@ -45,6 +45,21 @@ void main() {
       expect(acct.isAdmin, isTrue);
       expect(scopeForRole(Role.kratos), Scope.ship);
     });
+    test('an unknown role token survives a round-trip (no downgrade)', () {
+      // A client that doesn't recognise a role must NOT clobber it on re-sync.
+      final back = Account.fromJson({
+        'id': 'a',
+        'name': 'X',
+        'rate': '',
+        'role': 'someFutureRole',
+        'workcenterId': 'CP01',
+        'pinSalt': 's',
+        'pinHash': 'h',
+        'createdAtMs': 0,
+      });
+      expect(back.role, Role.technician); // display fallback
+      expect(back.toJson()['role'], 'someFutureRole'); // token preserved
+    });
     test('binds to a device and round-trips that binding', () {
       final k = Account(
         id: 'a',

@@ -115,7 +115,10 @@ class Account {
   final String id;
   String name;
   String rate; // rate / rank, e.g. "MM2"
-  Role role;
+  // The role's WIRE TOKEN is the source of truth, not the enum — so a build that
+  // doesn't recognise a token (e.g. an older client seeing a newer role) keeps
+  // it verbatim instead of silently downgrading it to technician on re-sync.
+  String roleToken;
   String workcenterId;
   String pinSalt;
   String pinHash; // sha256("$salt:$pin") — light auth, not a strong KDF
@@ -126,13 +129,18 @@ class Account {
     required this.id,
     required this.name,
     required this.rate,
-    required this.role,
+    required Role role,
     required this.workcenterId,
     required this.pinSalt,
     required this.pinHash,
     this.boundNodeId = '',
     required this.createdAtMs,
-  });
+  }) : roleToken = role.token;
+
+  /// The role this build understands (falls back to technician for unknown
+  /// tokens — but the original token is preserved in [roleToken]).
+  Role get role => roleFromToken(roleToken);
+  set role(Role r) => roleToken = r.token;
 
   bool checkPin(String pin) => hashPin(pinSalt, pin) == pinHash;
 
@@ -144,7 +152,7 @@ class Account {
         'id': id,
         'name': name,
         'rate': rate,
-        'role': role.token,
+        'role': roleToken, // preserve the original token verbatim
         'workcenterId': workcenterId,
         'pinSalt': pinSalt,
         'pinHash': pinHash,
@@ -152,17 +160,20 @@ class Account {
         'createdAtMs': createdAtMs,
       };
 
-  factory Account.fromJson(Map<String, dynamic> j) => Account(
-        id: j['id'] as String,
-        name: (j['name'] ?? '') as String,
-        rate: (j['rate'] ?? '') as String,
-        role: roleFromToken((j['role'] ?? 'technician') as String),
-        workcenterId: (j['workcenterId'] ?? '') as String,
-        pinSalt: (j['pinSalt'] ?? '') as String,
-        pinHash: (j['pinHash'] ?? '') as String,
-        boundNodeId: (j['boundNodeId'] ?? '') as String,
-        createdAtMs: (j['createdAtMs'] ?? 0) as int,
-      );
+  factory Account.fromJson(Map<String, dynamic> j) {
+    final raw = (j['role'] ?? 'technician') as String;
+    return Account(
+      id: j['id'] as String,
+      name: (j['name'] ?? '') as String,
+      rate: (j['rate'] ?? '') as String,
+      role: roleFromToken(raw),
+      workcenterId: (j['workcenterId'] ?? '') as String,
+      pinSalt: (j['pinSalt'] ?? '') as String,
+      pinHash: (j['pinHash'] ?? '') as String,
+      boundNodeId: (j['boundNodeId'] ?? '') as String,
+      createdAtMs: (j['createdAtMs'] ?? 0) as int,
+    )..roleToken = raw; // preserve the exact token, even if unknown to this build
+  }
 }
 
 String hashPin(String salt, String pin) =>
