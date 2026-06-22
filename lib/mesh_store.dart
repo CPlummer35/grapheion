@@ -12,6 +12,7 @@ import 'dart:convert';
 
 import 'domain/casrep.dart';
 import 'domain/chain.dart';
+import 'domain/feedback.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
 import 'domain/sked.dart';
@@ -30,6 +31,7 @@ const kPmsChecks = 'pmschecks'; // SKED / PMS checks
 const kQualifications = 'qualifications'; // qual tree nodes (watch/knowledge/…)
 const kQuals = 'quals'; // PQS progress (person x qualification)
 const kWatchbill = 'watchbill'; // watch assignments (day x station x period)
+const kFeedback = 'feedback'; // demo feedback (anyone writes, only Kratos reads)
 
 /// A peer seen on the mesh, from its presence beat.
 class Peer {
@@ -61,6 +63,7 @@ class MeshStore {
   final Map<String, Qualification> qualifications = {};
   final Map<String, PersonQual> quals = {}; // keyed by PersonQual.makeId
   final Map<String, WatchAssignment> watchbill = {};
+  final Map<String, FeedbackNote> feedback = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
   final Map<String, int> lastSeenMs = {}; // local receive time per peer node id
@@ -125,9 +128,18 @@ class MeshStore {
       } else if (coll == kWatchbill) {
         watchbill[docId] =
             WatchAssignment.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } else if (coll == kFeedback) {
+        feedback[docId] =
+            FeedbackNote.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       }
     } catch (_) {}
   }
+
+  /// Feedback newest first (for the Kratos inbox).
+  List<FeedbackNote> feedbackNewestFirst() => feedback.values.toList()
+    ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
+
+  int get unreadFeedback => feedback.values.where((f) => !f.read).length;
 
   // --- Watchbill / PQS queries ---------------------------------------------
 
@@ -312,6 +324,7 @@ class MeshStore {
     qualifications.clear();
     quals.clear();
     watchbill.clear();
+    feedback.clear();
     org.departments.clear();
     org.divisions.clear();
     org.workcenters.clear();

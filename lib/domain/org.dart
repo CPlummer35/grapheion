@@ -135,7 +135,8 @@ class Account {
   bool checkPin(String pin) => hashPin(pinSalt, pin) == pinHash;
 
   /// Roles that may manage the org chart + accounts.
-  bool get isAdmin => role == Role.divo || role == Role.threeMC;
+  bool get isAdmin =>
+      role == Role.divo || role == Role.threeMC || role == Role.kratos;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -180,6 +181,8 @@ Scope scopeForRole(Role r) {
       return Scope.department;
     case Role.threeMC:
       return Scope.ship;
+    case Role.kratos:
+      return Scope.ship; // sees everything
     case Role.portEngineer:
       return Scope.offship;
   }

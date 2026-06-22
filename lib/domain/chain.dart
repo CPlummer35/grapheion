@@ -15,6 +15,7 @@ enum Role {
   threeMC, // 3-M Coordinator — screens the job into the CSMP
   dh, // Department Head (universal — CHENG/WEPS/OPS/CSO/SUPPO)
   portEngineer, // OFF-SHIP — Regional Maintenance Center; reached over the relay
+  kratos, // super-user — sole feedback reader + highest authority (demo owner)
 }
 
 extension RoleInfo on Role {
@@ -35,6 +36,8 @@ extension RoleInfo on Role {
         return 'Department Head';
       case Role.portEngineer:
         return 'Port Engineer (off-ship)';
+      case Role.kratos:
+        return 'Kratos';
     }
   }
 
@@ -55,6 +58,8 @@ extension RoleInfo on Role {
         return 'DH';
       case Role.portEngineer:
         return 'PORT ENG';
+      case Role.kratos:
+        return 'KRATOS';
     }
   }
 

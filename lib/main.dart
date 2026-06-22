@@ -28,6 +28,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'domain/casrep.dart';
 import 'domain/chain.dart';
+import 'domain/feedback.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
 import 'domain/schedule.dart';
@@ -410,6 +411,9 @@ class _HomePageState extends State<HomePage> {
           for (final a in _store.watchbill.values) {
             _bleBroadcast(kWatchbill, a.id, jsonEncode(a.toJson()));
           }
+          for (final f in _store.feedback.values) {
+            _bleBroadcast(kFeedback, f.id, jsonEncode(f.toJson()));
+          }
         }
         if (mounted) setState(() {});
       });
@@ -769,6 +773,7 @@ class _HomePageState extends State<HomePage> {
       kQualifications,
       kQuals,
       kWatchbill,
+      kFeedback,
     ]) {
       for (final id in node.listDocuments(coll)) {
         final raw = node.getRaw(coll, id);
@@ -949,6 +954,138 @@ class _HomePageState extends State<HomePage> {
   /// Roles that build the watchbill / sign off PQS.
   bool get _canManageWatch =>
       _role != null && _role != Role.technician && _role != Role.portEngineer;
+
+  // --- Feedback (anyone submits; only Kratos reads) -------------------------
+
+  bool get _isKratos => _role == Role.kratos;
+
+  void _saveFeedback(FeedbackNote f) {
+    final json = jsonEncode(f.toJson());
+    _store.feedback[f.id] = f;
+    _node!.putRaw(kFeedback, f.id, json);
+    _bleBroadcast(kFeedback, f.id, json);
+    if (mounted) setState(() {});
+  }
+
+  void _submitFeedback(String text) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final feature =
+        _feature < _navFeatures.length ? _navFeatures[_feature].$2 : '';
+    _saveFeedback(FeedbackNote(
+      id: 'fb-$now-${_randHex(3)}',
+      text: text,
+      fromName: _name,
+      fromRole: _role ?? Role.technician,
+      context: feature,
+      createdAtMs: now,
+    ));
+  }
+
+  void _openFeedbackSheet() {
+    final ctrl = TextEditingController();
+    final feature =
+        _feature < _navFeatures.length ? _navFeatures[_feature].$2 : '';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              const Icon(Icons.feedback_outlined),
+              const SizedBox(width: 8),
+              Text('Send feedback', style: Theme.of(ctx).textTheme.titleLarge),
+            ]),
+            const SizedBox(height: 6),
+            Text('Goes to the demo owner over the mesh · context: $feature',
+                style: const TextStyle(color: Colors.grey, fontSize: 12)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              maxLines: 4,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: "What worked, what didn't, what's missing…",
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () {
+                final t = ctrl.text.trim();
+                if (t.isEmpty) return;
+                _submitFeedback(t);
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Feedback sent — thank you!')));
+              },
+              icon: const Icon(Icons.send),
+              label: const Text('Send'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Kratos-only feedback inbox.
+  Widget _feedbackPage() {
+    final notes = _store.feedbackNewestFirst();
+    if (notes.isEmpty) {
+      return const Center(
+          child: Text('No feedback yet.', style: TextStyle(color: Colors.grey)));
+    }
+    return ListView.separated(
+      itemCount: notes.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final f = notes[i];
+        return ListTile(
+          leading: Icon(
+              f.read ? Icons.mark_email_read : Icons.mark_email_unread,
+              color: f.read
+                  ? Colors.grey
+                  : Theme.of(context).colorScheme.primary),
+          title: Text(f.text),
+          subtitle: Text(
+              '${f.fromName} · ${f.fromRole.tag}${f.context.isEmpty ? '' : ' · ${f.context}'} · ${_ago(f.createdAtMs)}'),
+          isThreeLine: true,
+          onTap: () {
+            f.read = !f.read;
+            _saveFeedback(f);
+          },
+          trailing: IconButton(
+            icon: const Icon(Icons.delete_outline, size: 20),
+            onPressed: () => _deleteFeedback(f),
+          ),
+        );
+      },
+    );
+  }
+
+  void _deleteFeedback(FeedbackNote f) {
+    _store.feedback.remove(f.id);
+    _node!.putRaw(kFeedback, f.id, jsonEncode({'id': f.id, 'text': ''}));
+    _bleBroadcast(kFeedback, f.id, jsonEncode({'id': f.id, 'text': ''}));
+    if (mounted) setState(() {});
+  }
+
+  String _ago(int ms) {
+    final d =
+        Duration(milliseconds: DateTime.now().millisecondsSinceEpoch - ms);
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inHours < 1) return '${d.inMinutes}m ago';
+    if (d.inDays < 1) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
 
   // --- SKED (PMS) -----------------------------------------------------------
 
@@ -1228,6 +1365,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   List<Widget> _appBarActions() => [
+        if (!_isKratos)
+          IconButton(
+            onPressed: _openFeedbackSheet,
+            icon: const Icon(Icons.feedback_outlined),
+            tooltip: 'Send feedback',
+          ),
         if (_account?.isAdmin ?? false)
           IconButton(
             onPressed: () => Navigator.of(context).push(MaterialPageRoute(
@@ -1295,7 +1438,7 @@ class _HomePageState extends State<HomePage> {
   /// The action button for the current feature (CSMP → new job, SKED → add
   /// check), or none.
   Widget? _featureFab() {
-    switch (_features[_feature].$2) {
+    switch (_navFeatures[_feature].$2) {
       case 'CSMP':
         return _newJobFab();
       case 'SKED':
@@ -1341,10 +1484,10 @@ class _HomePageState extends State<HomePage> {
           bottom: _headerBar(),
         ),
         body: ListView(children: [
-          for (var i = 0; i < _features.length; i++)
+          for (var i = 0; i < _navFeatures.length; i++)
             ListTile(
-              leading: Icon(_features[i].$1),
-              title: Text(_features[i].$2),
+              leading: Icon(_navFeatures[i].$1),
+              title: Text(_navFeatures[i].$2),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => setState(() {
                 _feature = i;
@@ -1363,7 +1506,7 @@ class _HomePageState extends State<HomePage> {
         appBar: AppBar(
           leading: BackButton(
               onPressed: () => setState(() => _featureOpen = false)),
-          title: Text(_features[_feature].$2),
+          title: Text(_navFeatures[_feature].$2),
           actions: _appBarActions(),
         ),
         floatingActionButton: _featureFab(),
@@ -1384,6 +1527,11 @@ class _HomePageState extends State<HomePage> {
     (Icons.how_to_reg, 'Muster'),
   ];
 
+  /// The nav features for the signed-in role — Kratos additionally gets the
+  /// Feedback inbox (the only role that can read it).
+  List<(IconData, String)> get _navFeatures =>
+      [..._features, if (_isKratos) (Icons.feedback, 'Feedback')];
+
   /// Left feature rail: a vertical, tappable list of features (scrolls if it
   /// can't all fit; content switches on tap — no swipe).
   Widget _featureRail() {
@@ -1393,8 +1541,8 @@ class _HomePageState extends State<HomePage> {
       child: SingleChildScrollView(
         child: Column(children: [
           const SizedBox(height: 8),
-          for (var i = 0; i < _features.length; i++)
-            _featureRailItem(i, _features[i].$1, _features[i].$2),
+          for (var i = 0; i < _navFeatures.length; i++)
+            _featureRailItem(i, _navFeatures[i].$1, _navFeatures[i].$2),
           const SizedBox(height: 8),
         ]),
       ),
@@ -1432,7 +1580,7 @@ class _HomePageState extends State<HomePage> {
   Widget _featureBody(List<Job> mine, List<Job> pending, List<Job> active,
       List<Job> completed) {
     // Dispatch on the feature label so the order of _features can change freely.
-    switch (_features[_feature].$2) {
+    switch (_navFeatures[_feature].$2) {
       case 'CSMP':
         return _csmpView(mine, pending, active, completed);
       case 'SKED':
@@ -1443,6 +1591,8 @@ class _HomePageState extends State<HomePage> {
         return _connectionsPage();
       case 'Watchbills':
         return _watchPage();
+      case 'Feedback':
+        return _feedbackPage();
       case 'Supply':
         return _stubPage(Icons.inventory_2, 'Supply',
             'Parts ordering, NSN lookup, requisition status.');
@@ -3272,7 +3422,7 @@ class _SignInScreen extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 420),
               child: _AccountForm(
                 org: org,
-                roles: Role.values,
+                roles: isHost ? Role.values : Role.values.where((r) => r != Role.kratos).toList(),
                 submitLabel: 'Register & sign in',
                 onSubmit: (name, rate, role, wc, pin) {
                   final a = onCreate(
@@ -3379,7 +3529,7 @@ class _AdminScreenState extends State<_AdminScreen> {
               const SizedBox(height: 16),
               _AccountForm(
                 org: widget.org,
-                roles: Role.values,
+                roles: Role.values.where((r) => r != Role.kratos).toList(),
                 submitLabel: 'Create account',
                 onSubmit: (name, rate, role, wc, pin) {
                   final a = widget.onCreate(
