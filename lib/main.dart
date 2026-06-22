@@ -167,6 +167,7 @@ class _HomePageState extends State<HomePage> {
   bool _featureOpen = false; // narrow layout: is a feature open (vs the menu)
   int _watchDayOffset = 0; // watchbill: days from today
   WatchPeriod _watchPeriod = WatchPeriod.forenoon; // watchbill: selected period
+  final ValueNotifier<int> _feedbackTick = ValueNotifier(0); // refreshes open feedback sheet
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
   final Map<String, TransportLink?> _transport = {};
@@ -644,6 +645,7 @@ class _HomePageState extends State<HomePage> {
       final id = m['i'] as String;
       final docRaw = m['d'] as String;
       _store.applyDoc(coll, id, docRaw, remote: true, peer: null);
+      if (coll == kFeedback) _feedbackTick.value++;
       _node?.putRaw(coll, id, docRaw); // persist + re-bridge over Iroh
       // Visibility for BLE testing — a grapheion doc just crossed over Bluetooth.
       if (coll == kJobs || coll == kLog) debugPrint('[BLE-RX] $coll · $id');
@@ -839,6 +841,7 @@ class _HomePageState extends State<HomePage> {
     if (raw == null) return;
     _store.applyDoc(change.collection, change.docId, raw,
         remote: change.origin.isRemote, peer: change.origin.peerId);
+    if (change.collection == kFeedback) _feedbackTick.value++;
     if (mounted) setState(() {});
   }
 
@@ -1009,6 +1012,7 @@ class _HomePageState extends State<HomePage> {
     _store.feedback[f.id] = f;
     _node!.putRaw(kFeedback, f.id, json);
     _bleBroadcast(kFeedback, f.id, json);
+    _feedbackTick.value++;
     if (mounted) setState(() {});
   }
 
@@ -1031,10 +1035,6 @@ class _HomePageState extends State<HomePage> {
     final ctrl = TextEditingController();
     final feature =
         _feature < _navFeatures.length ? _navFeatures[_feature].$2 : '';
-    final mine = _store.feedback.values
-        .where((f) => f.fromId.isNotEmpty && f.fromId == _account?.id)
-        .toList()
-      ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1081,16 +1081,30 @@ class _HomePageState extends State<HomePage> {
                 icon: const Icon(Icons.send),
                 label: const Text('Send'),
               ),
-              if (mine.isNotEmpty) ...[
-                const Divider(height: 28),
-                const Text('YOUR FEEDBACK',
-                    style: TextStyle(
-                        color: Colors.grey,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                for (final f in mine) _myFeedbackTile(ctx, f),
-              ],
+              // Live "your feedback" — refreshes in place when a reply syncs.
+              ValueListenableBuilder<int>(
+                valueListenable: _feedbackTick,
+                builder: (ctx, _, __) {
+                  final mine = _store.feedback.values
+                      .where((f) => f.fromId.isNotEmpty && f.fromId == _account?.id)
+                      .toList()
+                    ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
+                  if (mine.isEmpty) return const SizedBox.shrink();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Divider(height: 28),
+                      const Text('YOUR FEEDBACK',
+                          style: TextStyle(
+                              color: Colors.grey,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      for (final f in mine) _myFeedbackTile(ctx, f),
+                    ],
+                  );
+                },
+              ),
             ],
           ),
         ),
