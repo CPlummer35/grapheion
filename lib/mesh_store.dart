@@ -134,11 +134,19 @@ class MeshStore {
         if (note.text.isEmpty) {
           feedback.remove(docId); // tombstone — a delete
         } else {
-          final isNew = !feedback.containsKey(docId);
+          final prev = feedback[docId];
           feedback[docId] = note;
-          // Only Kratos reads feedback — alert it when a new note lands.
-          if (remote && isNew && !note.read && role == Role.kratos) {
-            onNotify('New feedback', '${note.fromName}: ${note.text}', peer);
+          if (remote) {
+            // Kratos: alert it when a new note lands.
+            if (prev == null && !note.read && role == Role.kratos) {
+              onNotify('New feedback', '${note.fromName}: ${note.text}', peer);
+            }
+            // Submitter: alert me when a (new) reply to my note arrives.
+            final newReply =
+                note.hasResponse && note.response != (prev?.response ?? '');
+            if (newReply && role != Role.kratos && note.fromId == account?.id) {
+              onNotify('Reply to your feedback', note.response, peer);
+            }
           }
         }
       }

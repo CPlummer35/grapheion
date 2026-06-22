@@ -1019,6 +1019,7 @@ class _HomePageState extends State<HomePage> {
     _saveFeedback(FeedbackNote(
       id: 'fb-$now-${_randHex(3)}',
       text: text,
+      fromId: _account?.id ?? '',
       fromName: _name,
       fromRole: _role ?? Role.technician,
       context: feature,
@@ -1030,6 +1031,10 @@ class _HomePageState extends State<HomePage> {
     final ctrl = TextEditingController();
     final feature =
         _feature < _navFeatures.length ? _navFeatures[_feature].$2 : '';
+    final mine = _store.feedback.values
+        .where((f) => f.fromId.isNotEmpty && f.fromId == _account?.id)
+        .toList()
+      ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1039,45 +1044,98 @@ class _HomePageState extends State<HomePage> {
             right: 20,
             top: 20,
             bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(children: [
-              const Icon(Icons.feedback_outlined),
-              const SizedBox(width: 8),
-              Text('Send feedback', style: Theme.of(ctx).textTheme.titleLarge),
-            ]),
-            const SizedBox(height: 6),
-            Text('Goes to the demo owner over the mesh · context: $feature',
-                style: const TextStyle(color: Colors.grey, fontSize: 12)),
-            const SizedBox(height: 14),
-            TextField(
-              controller: ctrl,
-              maxLines: 4,
-              autofocus: true,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                hintText: "What worked, what didn't, what's missing…",
-                border: OutlineInputBorder(),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                const Icon(Icons.feedback_outlined),
+                const SizedBox(width: 8),
+                Text('Feedback', style: Theme.of(ctx).textTheme.titleLarge),
+              ]),
+              const SizedBox(height: 6),
+              Text('Goes to the demo owner over the mesh · context: $feature',
+                  style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              const SizedBox(height: 14),
+              TextField(
+                controller: ctrl,
+                maxLines: 4,
+                autofocus: true,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  hintText: "What worked, what didn't, what's missing…",
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () {
-                final t = ctrl.text.trim();
-                if (t.isEmpty) return;
-                _submitFeedback(t);
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('Feedback sent — thank you!')));
-              },
-              icon: const Icon(Icons.send),
-              label: const Text('Send'),
-            ),
-          ],
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: () {
+                  final t = ctrl.text.trim();
+                  if (t.isEmpty) return;
+                  _submitFeedback(t);
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Feedback sent — thank you!')));
+                },
+                icon: const Icon(Icons.send),
+                label: const Text('Send'),
+              ),
+              if (mine.isNotEmpty) ...[
+                const Divider(height: 28),
+                const Text('YOUR FEEDBACK',
+                    style: TextStyle(
+                        color: Colors.grey,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                for (final f in mine) _myFeedbackTile(ctx, f),
+              ],
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _myFeedbackTile(BuildContext ctx, FeedbackNote f) {
+    final scheme = Theme.of(ctx).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.outlineVariant),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(f.text),
+        const SizedBox(height: 2),
+        Text('${f.context.isEmpty ? '' : '${f.context} · '}${_ago(f.createdAtMs)}',
+            style: const TextStyle(color: Colors.grey, fontSize: 11)),
+        if (f.hasResponse) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: scheme.secondaryContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.reply, size: 14),
+              const SizedBox(width: 6),
+              Expanded(child: Text(f.response)),
+            ]),
+          ),
+        ] else
+          const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text('awaiting a reply…',
+                style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 11,
+                    fontStyle: FontStyle.italic)),
+          ),
+      ]),
     );
   }
 
@@ -1100,19 +1158,85 @@ class _HomePageState extends State<HomePage> {
                   ? Colors.grey
                   : Theme.of(context).colorScheme.primary),
           title: Text(f.text),
-          subtitle: Text(
-              '${f.fromName} · ${f.fromRole.tag}${f.context.isEmpty ? '' : ' · ${f.context}'} · ${_ago(f.createdAtMs)}'),
+          subtitle: Text([
+            '${f.fromName} · ${f.fromRole.tag}',
+            if (f.context.isNotEmpty) f.context,
+            _ago(f.createdAtMs),
+            if (f.hasResponse) 'replied ✓',
+          ].join(' · ')),
           isThreeLine: true,
-          onTap: () {
-            f.read = !f.read;
-            _saveFeedback(f);
-          },
+          onTap: () => _openFeedbackDetail(f),
           trailing: IconButton(
             icon: const Icon(Icons.delete_outline, size: 20),
             onPressed: () => _deleteFeedback(f),
           ),
         );
       },
+    );
+  }
+
+  /// Kratos: read a note in full and reply to the submitter (the reply syncs
+  /// back + notifies them).
+  void _openFeedbackDetail(FeedbackNote f) {
+    if (!f.read) {
+      f.read = true;
+      _saveFeedback(f); // mark read on open
+    }
+    final ctrl = TextEditingController(text: f.response);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                  '${f.fromName} · ${f.fromRole.tag}${f.context.isEmpty ? '' : ' · ${f.context}'} · ${_ago(f.createdAtMs)}',
+                  style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              const SizedBox(height: 8),
+              Text(f.text, style: Theme.of(ctx).textTheme.titleMedium),
+              const Divider(height: 28),
+              const Text('YOUR REPLY',
+                  style: TextStyle(
+                      color: Colors.grey,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ctrl,
+                maxLines: 3,
+                autofocus: true,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                    hintText: 'Reply to the submitter…',
+                    border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: () {
+                  final t = ctrl.text.trim();
+                  if (t.isEmpty) return;
+                  f.response = t;
+                  f.respondedAtMs = DateTime.now().millisecondsSinceEpoch;
+                  _saveFeedback(f);
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Reply sent.')));
+                },
+                icon: const Icon(Icons.reply),
+                label: const Text('Send reply'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

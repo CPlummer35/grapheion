@@ -6,23 +6,43 @@ import 'package:grapheion/domain/feedback.dart';
 import 'package:grapheion/domain/org.dart';
 
 void main() {
-  test('FeedbackNote round-trips', () {
+  test('FeedbackNote round-trips, incl. submitter id + reply', () {
     final f = FeedbackNote(
       id: 'fb-1',
       text: 'The SKED drag-and-drop is slick',
+      fromId: 'acct-7',
       fromName: 'LTJG Smith',
       fromRole: Role.divo,
       context: 'SKED',
-      read: false,
+      read: true,
+      response: 'Thanks — glad it lands.',
+      respondedAtMs: 456,
       createdAtMs: 123,
     );
     final back = FeedbackNote.fromJson(f.toJson());
     expect(back.text, 'The SKED drag-and-drop is slick');
+    expect(back.fromId, 'acct-7');
     expect(back.fromName, 'LTJG Smith');
     expect(back.fromRole, Role.divo);
     expect(back.context, 'SKED');
-    expect(back.read, isFalse);
+    expect(back.read, isTrue);
+    expect(back.hasResponse, isTrue);
+    expect(back.response, 'Thanks — glad it lands.');
+    expect(back.respondedAtMs, 456);
     expect(back.createdAtMs, 123);
+  });
+  test('a fresh note has no response', () {
+    final f = FeedbackNote(
+      id: 'fb-2',
+      text: 'x',
+      fromId: 'a',
+      fromName: 'n',
+      fromRole: Role.technician,
+      context: '',
+      createdAtMs: 0,
+    );
+    expect(f.hasResponse, isFalse);
+    expect(FeedbackNote.fromJson(f.toJson()).respondedAtMs, isNull);
   });
 
   group('Kratos role', () {
