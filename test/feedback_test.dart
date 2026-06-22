@@ -6,43 +6,48 @@ import 'package:grapheion/domain/feedback.dart';
 import 'package:grapheion/domain/org.dart';
 
 void main() {
-  test('FeedbackNote round-trips, incl. submitter id + reply', () {
+  test('FeedbackNote thread round-trips', () {
     final f = FeedbackNote(
       id: 'fb-1',
-      text: 'The SKED drag-and-drop is slick',
       fromId: 'acct-7',
       fromName: 'LTJG Smith',
       fromRole: Role.divo,
       context: 'SKED',
-      read: true,
-      response: 'Thanks — glad it lands.',
-      respondedAtMs: 456,
-      createdAtMs: 123,
+      messages: [
+        FeedbackMessage(fromOwner: false, text: 'SKED is slick', atMs: 100),
+        FeedbackMessage(fromOwner: true, text: 'Thanks — glad it lands', atMs: 200),
+        FeedbackMessage(fromOwner: false, text: 'one nit though…', atMs: 300),
+      ],
+      readByOwner: false,
+      readBySubmitter: true,
+      createdAtMs: 100,
     );
     final back = FeedbackNote.fromJson(f.toJson());
-    expect(back.text, 'The SKED drag-and-drop is slick');
     expect(back.fromId, 'acct-7');
     expect(back.fromName, 'LTJG Smith');
-    expect(back.fromRole, Role.divo);
     expect(back.context, 'SKED');
-    expect(back.read, isTrue);
-    expect(back.hasResponse, isTrue);
-    expect(back.response, 'Thanks — glad it lands.');
-    expect(back.respondedAtMs, 456);
-    expect(back.createdAtMs, 123);
+    expect(back.messages.length, 3);
+    expect(back.preview, 'SKED is slick');
+    expect(back.lastMessage?.text, 'one nit though…');
+    expect(back.lastMessage?.fromOwner, isFalse);
+    expect(back.hasOwnerReply, isTrue);
+    expect(back.lastActivityMs, 300);
+    expect(back.readByOwner, isFalse);
   });
-  test('a fresh note has no response', () {
+  test('a fresh thread is just the submitter message, no owner reply', () {
     final f = FeedbackNote(
       id: 'fb-2',
-      text: 'x',
       fromId: 'a',
       fromName: 'n',
       fromRole: Role.technician,
       context: '',
-      createdAtMs: 0,
+      messages: [FeedbackMessage(fromOwner: false, text: 'x', atMs: 5)],
+      createdAtMs: 5,
     );
-    expect(f.hasResponse, isFalse);
-    expect(FeedbackNote.fromJson(f.toJson()).respondedAtMs, isNull);
+    expect(f.hasOwnerReply, isFalse);
+    final back = FeedbackNote.fromJson(f.toJson());
+    expect(back.messages.single.text, 'x');
+    expect(back.lastActivityMs, 5);
   });
 
   group('Kratos role', () {

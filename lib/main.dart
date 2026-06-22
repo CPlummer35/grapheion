@@ -53,6 +53,10 @@ const _kKratosPass = 'kratos-change-me-before-demo';
 /// A peer is "online" if we've heard a presence beat from it within this window.
 const _kOnlineWindowMs = 30 * 1000;
 
+/// Peers not heard from within this window are dropped from the Connection list
+/// (clears stale ghosts left by reinstalls that churned a device's node id).
+const _kStaleWindowMs = 3 * 60 * 1000;
+
 // CRDT-over-BLE 0xAF frame format (matches the peat BleBridge wire format):
 //   [0xAF][transport][collLen][collection][msgId:u32][fragIdx:u8][fragCount:u8][chunk]
 // grapheion rides this in parallel with the Iroh path: each doc is broadcast as
@@ -1016,21 +1020,47 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() {});
   }
 
+  /// Start a new feedback thread (the submitter's first message).
   void _submitFeedback(String text) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final feature =
         _feature < _navFeatures.length ? _navFeatures[_feature].$2 : '';
     _saveFeedback(FeedbackNote(
       id: 'fb-$now-${_randHex(3)}',
-      text: text,
       fromId: _account?.id ?? '',
       fromName: _name,
       fromRole: _role ?? Role.technician,
       context: feature,
+      messages: [FeedbackMessage(fromOwner: false, text: text, atMs: now)],
+      readByOwner: false,
+      readBySubmitter: true,
       createdAtMs: now,
     ));
   }
 
+  /// Append a message to a thread, from the owner (Kratos) or the submitter.
+  void _addFeedbackMessage(FeedbackNote f, String text,
+      {required bool fromOwner}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    f.messages.add(FeedbackMessage(fromOwner: fromOwner, text: text, atMs: now));
+    // Sender has seen it; the other side now has an unread message.
+    f.readByOwner = fromOwner;
+    f.readBySubmitter = !fromOwner;
+    _saveFeedback(f);
+  }
+
+  void _markFeedbackRead(FeedbackNote f, {required bool asOwner}) {
+    if (asOwner && !f.readByOwner) {
+      f.readByOwner = true;
+      _saveFeedback(f);
+    } else if (!asOwner && !f.readBySubmitter) {
+      f.readBySubmitter = true;
+      _saveFeedback(f);
+    }
+  }
+
+  /// The submitter's "send feedback" sheet — compose a new note, plus a live
+  /// list of their existing threads (tap to open the conversation).
   void _openFeedbackSheet() {
     final ctrl = TextEditingController();
     final feature =
@@ -1081,14 +1111,15 @@ class _HomePageState extends State<HomePage> {
                 icon: const Icon(Icons.send),
                 label: const Text('Send'),
               ),
-              // Live "your feedback" — refreshes in place when a reply syncs.
               ValueListenableBuilder<int>(
                 valueListenable: _feedbackTick,
                 builder: (ctx, _, __) {
                   final mine = _store.feedback.values
-                      .where((f) => f.fromId.isNotEmpty && f.fromId == _account?.id)
+                      .where(
+                          (f) => f.fromId.isNotEmpty && f.fromId == _account?.id)
                       .toList()
-                    ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
+                    ..sort((a, b) =>
+                        b.lastActivityMs.compareTo(a.lastActivityMs));
                   if (mine.isEmpty) return const SizedBox.shrink();
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1099,8 +1130,8 @@ class _HomePageState extends State<HomePage> {
                               color: Colors.grey,
                               fontSize: 11,
                               fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 6),
-                      for (final f in mine) _myFeedbackTile(ctx, f),
+                      for (final f in mine)
+                        _feedbackThreadTile(f, asOwner: false),
                     ],
                   );
                 },
@@ -1112,143 +1143,157 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _myFeedbackTile(BuildContext ctx, FeedbackNote f) {
-    final scheme = Theme.of(ctx).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        border: Border.all(color: scheme.outlineVariant),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(f.text),
-        const SizedBox(height: 2),
-        Text('${f.context.isEmpty ? '' : '${f.context} · '}${_ago(f.createdAtMs)}',
-            style: const TextStyle(color: Colors.grey, fontSize: 11)),
-        if (f.hasResponse) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: scheme.secondaryContainer,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Icon(Icons.reply, size: 14),
-              const SizedBox(width: 6),
-              Expanded(child: Text(f.response)),
-            ]),
-          ),
-        ] else
-          const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: Text('awaiting a reply…',
-                style: TextStyle(
-                    color: Colors.grey,
-                    fontSize: 11,
-                    fontStyle: FontStyle.italic)),
-          ),
-      ]),
-    );
-  }
-
-  /// Kratos-only feedback inbox.
+  /// Kratos-only feedback inbox — a list of threads.
   Widget _feedbackPage() {
-    final notes = _store.feedbackNewestFirst();
-    if (notes.isEmpty) {
-      return const Center(
-          child: Text('No feedback yet.', style: TextStyle(color: Colors.grey)));
-    }
-    return ListView.separated(
-      itemCount: notes.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (_, i) {
-        final f = notes[i];
-        return ListTile(
-          leading: Icon(
-              f.read ? Icons.mark_email_read : Icons.mark_email_unread,
-              color: f.read
-                  ? Colors.grey
-                  : Theme.of(context).colorScheme.primary),
-          title: Text(f.text),
-          subtitle: Text([
-            '${f.fromName} · ${f.fromRole.tag}',
-            if (f.context.isNotEmpty) f.context,
-            _ago(f.createdAtMs),
-            if (f.hasResponse) 'replied ✓',
-          ].join(' · ')),
-          isThreeLine: true,
-          onTap: () => _openFeedbackDetail(f),
-          trailing: IconButton(
-            icon: const Icon(Icons.delete_outline, size: 20),
-            onPressed: () => _deleteFeedback(f),
-          ),
+    return ValueListenableBuilder<int>(
+      valueListenable: _feedbackTick,
+      builder: (ctx, _, __) {
+        final notes = _store.feedbackNewestFirst();
+        if (notes.isEmpty) {
+          return const Center(
+              child: Text('No feedback yet.',
+                  style: TextStyle(color: Colors.grey)));
+        }
+        return ListView.separated(
+          itemCount: notes.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (_, i) =>
+              _feedbackThreadTile(notes[i], asOwner: true, deletable: true),
         );
       },
     );
   }
 
-  /// Kratos: read a note in full and reply to the submitter (the reply syncs
-  /// back + notifies them).
-  void _openFeedbackDetail(FeedbackNote f) {
-    if (!f.read) {
-      f.read = true;
-      _saveFeedback(f); // mark read on open
-    }
-    final ctrl = TextEditingController(text: f.response);
+  /// A thread row (both the Kratos inbox + the submitter's list use this).
+  Widget _feedbackThreadTile(FeedbackNote f,
+      {required bool asOwner, bool deletable = false}) {
+    final unread = asOwner ? !f.readByOwner : !f.readBySubmitter;
+    final last = f.lastMessage;
+    return ListTile(
+      leading: Icon(
+        unread ? Icons.mark_chat_unread : Icons.forum_outlined,
+        color: unread ? Theme.of(context).colorScheme.primary : Colors.grey,
+      ),
+      title: Text(f.preview, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text([
+        if (asOwner) '${f.fromName} · ${f.fromRole.tag}',
+        if (f.context.isNotEmpty) f.context,
+        if (last != null)
+          '${last.fromOwner ? (asOwner ? 'you' : 'owner') : (asOwner ? f.fromName.split(' ').last : 'you')}: ${last.text}',
+      ].join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis),
+      onTap: () => _openFeedbackThread(f, asOwner: asOwner),
+      trailing: deletable
+          ? IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20),
+              onPressed: () => _deleteFeedback(f),
+            )
+          : Text(_ago(f.lastActivityMs),
+              style: const TextStyle(color: Colors.grey, fontSize: 11)),
+    );
+  }
+
+  /// The conversation view both sides share — chat bubbles + a compose box.
+  /// [asOwner] is true for Kratos, false for the submitter.
+  void _openFeedbackThread(FeedbackNote f, {required bool asOwner}) {
+    final id = f.id;
+    _markFeedbackRead(f, asOwner: asOwner);
+    final ctrl = TextEditingController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                  '${f.fromName} · ${f.fromRole.tag}${f.context.isEmpty ? '' : ' · ${f.context}'} · ${_ago(f.createdAtMs)}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12)),
-              const SizedBox(height: 8),
-              Text(f.text, style: Theme.of(ctx).textTheme.titleMedium),
-              const Divider(height: 28),
-              const Text('YOUR REPLY',
-                  style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              TextField(
-                controller: ctrl,
-                maxLines: 3,
-                autofocus: true,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                    hintText: 'Reply to the submitter…',
-                    border: OutlineInputBorder()),
+            bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                    '${f.fromName} · ${f.fromRole.tag}${f.context.isEmpty ? '' : ' · ${f.context}'}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12)),
               ),
-              const SizedBox(height: 14),
-              FilledButton.icon(
-                onPressed: () {
-                  final t = ctrl.text.trim();
-                  if (t.isEmpty) return;
-                  f.response = t;
-                  f.respondedAtMs = DateTime.now().millisecondsSinceEpoch;
-                  _saveFeedback(f);
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Reply sent.')));
-                },
-                icon: const Icon(Icons.reply),
-                label: const Text('Send reply'),
-              ),
-            ],
-          ),
+            ),
+            const Divider(height: 1),
+            ValueListenableBuilder<int>(
+              valueListenable: _feedbackTick,
+              builder: (ctx, _, __) {
+                final note = _store.feedback[id];
+                if (note == null) return const SizedBox.shrink();
+                // keep marking incoming messages read while the thread is open
+                _markFeedbackRead(note, asOwner: asOwner);
+                return ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 360),
+                  child: ListView(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      for (final m in note.messages)
+                        _feedbackBubble(m, mine: m.fromOwner == asOwner),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 8, 12),
+              child: Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: ctrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: const InputDecoration(
+                      hintText: 'Message…',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: () {
+                    final t = ctrl.text.trim();
+                    if (t.isEmpty) return;
+                    final note = _store.feedback[id];
+                    if (note == null) return;
+                    _addFeedbackMessage(note, t, fromOwner: asOwner);
+                    ctrl.clear();
+                  },
+                ),
+              ]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _feedbackBubble(FeedbackMessage m, {required bool mine}) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        constraints: const BoxConstraints(maxWidth: 280),
+        decoration: BoxDecoration(
+          color: mine
+              ? scheme.primaryContainer
+              : scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment:
+              mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            Text(m.text),
+            const SizedBox(height: 2),
+            Text(_ago(m.atMs),
+                style: const TextStyle(color: Colors.grey, fontSize: 10)),
+          ],
         ),
       ),
     );
@@ -2999,7 +3044,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _connectionsPage() {
-    final peers = _presence.values.toList()
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final peers = _presence.values.where((p) {
+      final ls = _lastSeenMs[p.nodeId];
+      return ls != null && now - ls <= _kStaleWindowMs;
+    }).toList()
       ..sort((a, b) {
         final ao = _online(a.nodeId) ? 0 : 1;
         final bo = _online(b.nodeId) ? 0 : 1;

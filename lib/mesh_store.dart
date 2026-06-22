@@ -131,21 +131,22 @@ class MeshStore {
       } else if (coll == kFeedback) {
         final note =
             FeedbackNote.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        if (note.text.isEmpty) {
+        if (note.messages.isEmpty) {
           feedback.remove(docId); // tombstone — a delete
         } else {
           final prev = feedback[docId];
           feedback[docId] = note;
-          if (remote) {
-            // Kratos: alert it when a new note lands.
-            if (prev == null && !note.read && role == Role.kratos) {
-              onNotify('New feedback', '${note.fromName}: ${note.text}', peer);
-            }
-            // Submitter: alert me when a (new) reply to my note arrives.
-            final newReply =
-                note.hasResponse && note.response != (prev?.response ?? '');
-            if (newReply && role != Role.kratos && note.fromId == account?.id) {
-              onNotify('Reply to your feedback', note.response, peer);
+          // A new message in the thread → notify the other side.
+          if (remote && note.messages.length > (prev?.messages.length ?? 0)) {
+            final last = note.lastMessage!;
+            if (last.fromOwner) {
+              // owner replied — notify the submitter (their note)
+              if (role != Role.kratos && note.fromId == account?.id) {
+                onNotify('Reply to your feedback', last.text, peer);
+              }
+            } else if (role == Role.kratos) {
+              // submitter wrote — notify Kratos
+              onNotify('New feedback', '${note.fromName}: ${last.text}', peer);
             }
           }
         }
@@ -153,11 +154,12 @@ class MeshStore {
     } catch (_) {}
   }
 
-  /// Feedback newest first (for the Kratos inbox).
+  /// Feedback threads, most-recently-active first (for the Kratos inbox).
   List<FeedbackNote> feedbackNewestFirst() => feedback.values.toList()
-    ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
+    ..sort((a, b) => b.lastActivityMs.compareTo(a.lastActivityMs));
 
-  int get unreadFeedback => feedback.values.where((f) => !f.read).length;
+  /// Threads with an unread message for Kratos (drives the rail badge).
+  int get unreadFeedback => feedback.values.where((f) => !f.readByOwner).length;
 
   // --- Watchbill / PQS queries ---------------------------------------------
 
