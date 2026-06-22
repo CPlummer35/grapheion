@@ -262,3 +262,233 @@ bool readyToBoard(Qualification q, PersonQual? pq, Set<String> qualifiedIds) {
   }
   return true;
 }
+
+// --- Evolutions + the watchbill -------------------------------------------
+//
+// A watchbill fills every role an EVOLUTION requires. In port the evolution is
+// the day-to-day duty day. Roles are STANDING (one person the whole evolution)
+// or ROTATING (split into the evolution's section SHIFTS). A BillEntry is one
+// filled cell. Evolutions are data, so new ones can be defined later.
+
+/// One rotation slot — a "section" stands it — for rotating roles.
+class WatchShift {
+  final String id; // 's1'…'s5'
+  String label; // section label, e.g. "1"
+  String start; // "0630"
+  String end; // "1130"
+
+  WatchShift(
+      {required this.id,
+      required this.label,
+      required this.start,
+      required this.end});
+
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'label': label, 'start': start, 'end': end};
+
+  factory WatchShift.fromJson(Map<String, dynamic> j) => WatchShift(
+        id: j['id'] as String,
+        label: (j['label'] ?? '') as String,
+        start: (j['start'] ?? '') as String,
+        end: (j['end'] ?? '') as String,
+      );
+}
+
+/// A required role in an evolution — a watch station that must be manned.
+class EvolutionRole {
+  final String id; // unique within the evolution
+  String stationId; // the watch-station Qualification id required for it
+  String name; // display label
+  bool rotating; // false = standing; true = sectioned across the shifts
+  int order;
+
+  EvolutionRole({
+    required this.id,
+    required this.stationId,
+    required this.name,
+    this.rotating = false,
+    this.order = 0,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'stationId': stationId,
+        'name': name,
+        'rotating': rotating,
+        'order': order,
+      };
+
+  factory EvolutionRole.fromJson(Map<String, dynamic> j) => EvolutionRole(
+        id: j['id'] as String,
+        stationId: (j['stationId'] ?? '') as String,
+        name: (j['name'] ?? '') as String,
+        rotating: (j['rotating'] ?? false) as bool,
+        order: (j['order'] ?? 0) as int,
+      );
+}
+
+/// A named event with the roles it requires + (for rotating roles) its shifts.
+class Evolution {
+  final String id;
+  String name;
+  bool inPort;
+  List<WatchShift> shifts;
+  List<EvolutionRole> roles;
+  int order;
+
+  Evolution({
+    required this.id,
+    required this.name,
+    this.inPort = true,
+    List<WatchShift>? shifts,
+    List<EvolutionRole>? roles,
+    this.order = 0,
+  })  : shifts = shifts ?? [],
+        roles = roles ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'inPort': inPort,
+        'shifts': shifts.map((s) => s.toJson()).toList(),
+        'roles': roles.map((r) => r.toJson()).toList(),
+        'order': order,
+      };
+
+  factory Evolution.fromJson(Map<String, dynamic> j) => Evolution(
+        id: j['id'] as String,
+        name: (j['name'] ?? '') as String,
+        inPort: (j['inPort'] ?? true) as bool,
+        shifts: ((j['shifts'] as List?) ?? [])
+            .map((e) => WatchShift.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        roles: ((j['roles'] as List?) ?? [])
+            .map((e) => EvolutionRole.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        order: (j['order'] ?? 0) as int,
+      );
+}
+
+/// One filled cell: a person posted to a role (+ shift, if rotating) on a day's
+/// instance of an evolution.
+class BillEntry {
+  final String id; // '{dayMs}|{evolutionId}|{roleId}|{shiftId}'
+  final int dayMs;
+  final String evolutionId;
+  final String roleId;
+  final String shiftId; // '' for standing roles
+  String personId;
+  int updatedAtMs;
+
+  BillEntry({
+    required this.id,
+    required this.dayMs,
+    required this.evolutionId,
+    required this.roleId,
+    required this.shiftId,
+    required this.personId,
+    required this.updatedAtMs,
+  });
+
+  static String makeId(
+          int dayMs, String evolutionId, String roleId, String shiftId) =>
+      '${startOfDay(dayMs)}|$evolutionId|$roleId|$shiftId';
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'dayMs': dayMs,
+        'evolutionId': evolutionId,
+        'roleId': roleId,
+        'shiftId': shiftId,
+        'personId': personId,
+        'updatedAtMs': updatedAtMs,
+      };
+
+  factory BillEntry.fromJson(Map<String, dynamic> j) => BillEntry(
+        id: j['id'] as String,
+        dayMs: (j['dayMs'] ?? 0) as int,
+        evolutionId: (j['evolutionId'] ?? '') as String,
+        roleId: (j['roleId'] ?? '') as String,
+        shiftId: (j['shiftId'] ?? '') as String,
+        personId: (j['personId'] ?? '') as String,
+        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+      );
+}
+
+/// One fillable slot on a bill: a (role, shift) pair + the station it needs.
+class BillSlot {
+  final String roleId;
+  final String shiftId; // '' for standing
+  final String stationId;
+  final bool standing;
+
+  BillSlot(
+      {required this.roleId,
+      required this.shiftId,
+      required this.stationId,
+      required this.standing});
+
+  String get key => '$roleId|$shiftId';
+}
+
+/// Expand an evolution into its fillable slots — standing roles get one slot,
+/// rotating roles one per shift.
+List<BillSlot> evolutionSlots(Evolution e) => [
+      for (final r in e.roles)
+        if (r.rotating)
+          for (final s in e.shifts)
+            BillSlot(
+                roleId: r.id,
+                shiftId: s.id,
+                stationId: r.stationId,
+                standing: false)
+        else
+          BillSlot(
+              roleId: r.id,
+              shiftId: '',
+              stationId: r.stationId,
+              standing: true),
+    ];
+
+/// Auto-fill a bill: assign qualified people to [slots], never double-booking a
+/// person into overlapping watches (a standing watch overlaps everything; two
+/// rotating watches overlap only if they share a shift), spreading load evenly.
+/// Returns slot.key -> personId; slots with no eligible person are left out.
+Map<String, String> autoFillBill({
+  required List<BillSlot> slots,
+  required List<String> people,
+  required bool Function(String personId, String stationId) isQualified,
+}) {
+  final result = <String, String>{};
+  final load = {for (final p in people) p: 0};
+  final standingPeople = <String>{}; // in a standing watch — busy all day
+  final shiftPeople = <String, Set<String>>{}; // shiftId -> people busy then
+
+  bool free(String p, BillSlot s) {
+    if (standingPeople.contains(p)) return false;
+    if (s.standing) return shiftPeople.values.every((set) => !set.contains(p));
+    return !(shiftPeople[s.shiftId]?.contains(p) ?? false);
+  }
+
+  // Standing slots first (most constraining), then rotating.
+  final ordered = [
+    ...slots.where((s) => s.standing),
+    ...slots.where((s) => !s.standing),
+  ];
+  for (final s in ordered) {
+    final cands = people
+        .where((p) => isQualified(p, s.stationId) && free(p, s))
+        .toList()
+      ..sort((a, b) => load[a]!.compareTo(load[b]!));
+    if (cands.isEmpty) continue;
+    final pick = cands.first;
+    result[s.key] = pick;
+    load[pick] = load[pick]! + 1;
+    if (s.standing) {
+      standingPeople.add(pick);
+    } else {
+      (shiftPeople[s.shiftId] ??= {}).add(pick);
+    }
+  }
+  return result;
+}

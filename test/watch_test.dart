@@ -125,4 +125,81 @@ void main() {
       expect(back.qualId, 'poow');
     });
   });
+
+  group('evolution + watchbill', () {
+    Evolution ev() => Evolution(
+          id: 'ev',
+          name: 'In-Port Duty',
+          shifts: [
+            WatchShift(id: 's1', label: '1', start: '0630', end: '1130'),
+            WatchShift(id: 's2', label: '2', start: '1130', end: '1630'),
+          ],
+          roles: [
+            EvolutionRole(
+                id: 'r-cdo', stationId: 'cdo', name: 'CDO', rotating: false),
+            EvolutionRole(
+                id: 'r-poow', stationId: 'poow', name: 'POOW', rotating: true),
+          ],
+        );
+
+    test('evolutionSlots: standing -> 1 slot, rotating -> one per shift', () {
+      final slots = evolutionSlots(ev());
+      expect(slots.length, 3); // CDO (1) + POOW (2 shifts)
+      expect(slots.where((s) => s.standing).length, 1);
+      expect(slots.where((s) => s.shiftId == 's1').length, 1);
+    });
+
+    test('evolution round-trips', () {
+      final back = Evolution.fromJson(ev().toJson());
+      expect(back.roles.length, 2);
+      expect(back.shifts.length, 2);
+      expect(back.roles.firstWhere((r) => r.id == 'r-poow').rotating, isTrue);
+    });
+
+    test('BillEntry id keyed by day/evolution/role/shift', () {
+      final day = DateTime(2026, 6, 21, 14).millisecondsSinceEpoch;
+      expect(BillEntry.makeId(day, 'ev', 'r-poow', 's1'),
+          '${startOfDay(day)}|ev|r-poow|s1');
+    });
+
+    test('auto-fill uses only qualified people', () {
+      final quals = {
+        'a': {'cdo'},
+        'b': {'poow'}
+      };
+      final fill = autoFillBill(
+        slots: evolutionSlots(ev()),
+        people: ['a', 'b'],
+        isQualified: (p, st) => quals[p]?.contains(st) ?? false,
+      );
+      expect(fill['r-cdo|'], 'a');
+      expect(fill['r-poow|s1'], 'b');
+    });
+
+    test('a standing watch makes a person unavailable for any rotating shift',
+        () {
+      // p is the only person and is qualified for everything; takes CDO
+      // (standing, filled first) -> then can't take POOW shifts.
+      final fill = autoFillBill(
+        slots: evolutionSlots(ev()),
+        people: ['p'],
+        isQualified: (_, __) => true,
+      );
+      expect(fill['r-cdo|'], 'p');
+      expect(fill.containsKey('r-poow|s1'), isFalse);
+    });
+
+    test('even load spreads rotating shifts across equally-qualified people',
+        () {
+      final fill = autoFillBill(
+        slots: evolutionSlots(ev()),
+        people: ['a', 'b'],
+        isQualified: (p, st) => st == 'poow', // both qualified for POOW only
+      );
+      // CDO unfillable (nobody qualified); the two POOW shifts go to different
+      // people rather than doubling one up.
+      expect(fill.containsKey('r-cdo|'), isFalse);
+      expect({fill['r-poow|s1'], fill['r-poow|s2']}, {'a', 'b'});
+    });
+  });
 }
