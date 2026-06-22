@@ -3361,6 +3361,45 @@ class _StartScreen extends StatelessWidget {
   }
 }
 
+/// A title that reveals a hidden action on 5 quick taps (within 3s) or a
+/// long-press — the discreet Kratos unlock trigger.
+class _SecretTitle extends StatefulWidget {
+  const _SecretTitle(this.text, {required this.onUnlock});
+  final String text;
+  final VoidCallback onUnlock;
+  @override
+  State<_SecretTitle> createState() => _SecretTitleState();
+}
+
+class _SecretTitleState extends State<_SecretTitle> {
+  int _taps = 0;
+  DateTime? _first;
+
+  void _tap() {
+    final now = DateTime.now();
+    if (_first == null ||
+        now.difference(_first!) > const Duration(seconds: 3)) {
+      _first = now;
+      _taps = 1;
+    } else {
+      _taps++;
+    }
+    if (_taps >= 5) {
+      _taps = 0;
+      _first = null;
+      widget.onUnlock();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _tap,
+        onLongPress: widget.onUnlock,
+        child: Text(widget.text),
+      );
+}
+
 /// Account sign-in: bootstrap the first admin (host) or pick your profile + PIN.
 class _SignInScreen extends StatelessWidget {
   const _SignInScreen({
@@ -3472,11 +3511,10 @@ class _SignInScreen extends StatelessWidget {
         tooltip: 'Reset / leave mesh',
       );
 
-  /// The title — long-press reveals the hidden Kratos unlock (god mode).
-  Widget _kratosTitle(BuildContext context, String text) => GestureDetector(
-        onLongPress: () => _promptKratos(context),
-        child: Text(text),
-      );
+  /// The title — 5 quick taps (or a long-press) reveals the hidden Kratos
+  /// unlock (god mode). Tap-count is far more reliable than long-press alone.
+  Widget _kratosTitle(BuildContext context, String text) =>
+      _SecretTitle(text, onUnlock: () => _promptKratos(context));
 
   void _promptKratos(BuildContext context) {
     final ctrl = TextEditingController();
