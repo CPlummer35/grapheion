@@ -1,16 +1,18 @@
 # Grapheion
 
-**Mesh-synced 3-M maintenance — corrective (CSMP), preventive (SKED/PMS), and the
-weekly schedule — a proof-of-concept aiming to replace the Navy's OMMS-NG + SKED
-deckplate experience.**
+**An all-encompassing, offline-first ship administration tool for a Navy ship —
+maintenance (corrective + preventive), casualty reporting, watch organization &
+qualifications, and more — mesh-synced across the crew's devices with no central
+server.**
 
 Grapheion is built on [peat](https://github.com/defenseunicorns/peat)'s
-offline-first mesh: maintenance jobs and their full chain-of-custody sync
-peer-to-peer across a ship's devices (handhelds + always-on anchors) with no
-central server, and converge automatically as devices move between spaces and
-drop in and out of range. It meshes over **Wi-Fi/LAN**, the **n0 relay** (for
-the off-ship Port Engineer), **and Bluetooth LE** — so two handhelds in a
-compartment with no network still converge.
+offline-first mesh: a ship's administrative records — maintenance jobs and their
+chain of custody, casualty reports, the watchbill and qualifications, the org
+chart — sync peer-to-peer across the crew's devices (handhelds + always-on
+anchors) with no central server, and converge automatically as devices move
+between spaces and drop in and out of range. It meshes over **Wi-Fi/LAN**, the
+**n0 relay** (for off-ship reachback), **and Bluetooth LE** — so two handhelds
+in a compartment with no network still converge.
 
 ## What it does today
 
