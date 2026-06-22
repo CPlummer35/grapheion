@@ -1021,16 +1021,16 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Start a new feedback thread (the submitter's first message).
-  void _submitFeedback(String text) {
+  void _submitFeedback(String text, {String context = ''}) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final feature =
         _feature < _navFeatures.length ? _navFeatures[_feature].$2 : '';
     _saveFeedback(FeedbackNote(
       id: 'fb-$now-${_randHex(3)}',
       fromId: _account?.id ?? '',
-      fromName: _name,
+      fromRate: _account?.rate ?? '', // rate/rank only — no name
       fromRole: _role ?? Role.technician,
-      context: feature,
+      context: context.trim().isEmpty ? feature : context.trim(),
       messages: [FeedbackMessage(fromOwner: false, text: text, atMs: now)],
       readByOwner: false,
       readBySubmitter: true,
@@ -1065,6 +1065,7 @@ class _HomePageState extends State<HomePage> {
     final ctrl = TextEditingController();
     final feature =
         _feature < _navFeatures.length ? _navFeatures[_feature].$2 : '';
+    final ctxCtrl = TextEditingController(text: feature);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1085,9 +1086,20 @@ class _HomePageState extends State<HomePage> {
                 Text('Feedback', style: Theme.of(ctx).textTheme.titleLarge),
               ]),
               const SizedBox(height: 6),
-              Text('Goes to the demo owner over the mesh · context: $feature',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              const Text('Goes to the demo owner over the mesh.',
+                  style: TextStyle(color: Colors.grey, fontSize: 12)),
               const SizedBox(height: 14),
+              TextField(
+                controller: ctxCtrl,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'About',
+                  hintText: 'What this is about',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 10),
               TextField(
                 controller: ctrl,
                 maxLines: 4,
@@ -1103,7 +1115,7 @@ class _HomePageState extends State<HomePage> {
                 onPressed: () {
                   final t = ctrl.text.trim();
                   if (t.isEmpty) return;
-                  _submitFeedback(t);
+                  _submitFeedback(t, context: ctxCtrl.text);
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                       content: Text('Feedback sent — thank you!')));
@@ -1164,6 +1176,10 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// How a submitter is shown — rate/rank + role tag, never a name.
+  String _fromLabel(FeedbackNote f) =>
+      f.fromRate.isEmpty ? f.fromRole.tag : '${f.fromRate} · ${f.fromRole.tag}';
+
   /// A thread row (both the Kratos inbox + the submitter's list use this).
   Widget _feedbackThreadTile(FeedbackNote f,
       {required bool asOwner, bool deletable = false}) {
@@ -1176,10 +1192,10 @@ class _HomePageState extends State<HomePage> {
       ),
       title: Text(f.preview, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text([
-        if (asOwner) '${f.fromName} · ${f.fromRole.tag}',
+        if (asOwner) _fromLabel(f),
         if (f.context.isNotEmpty) f.context,
         if (last != null)
-          '${last.fromOwner ? (asOwner ? 'you' : 'owner') : (asOwner ? f.fromName.split(' ').last : 'you')}: ${last.text}',
+          '${last.fromOwner ? (asOwner ? 'you' : 'owner') : (asOwner ? _fromLabel(f) : 'you')}: ${last.text}',
       ].join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis),
       onTap: () => _openFeedbackThread(f, asOwner: asOwner),
       trailing: deletable
@@ -1212,7 +1228,7 @@ class _HomePageState extends State<HomePage> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                    '${f.fromName} · ${f.fromRole.tag}${f.context.isEmpty ? '' : ' · ${f.context}'}',
+                    '${_fromLabel(f)}${f.context.isEmpty ? '' : ' · ${f.context}'}',
                     style: const TextStyle(color: Colors.grey, fontSize: 12)),
               ),
             ),

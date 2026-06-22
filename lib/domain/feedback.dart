@@ -25,10 +25,10 @@ class FeedbackMessage {
 
 class FeedbackNote {
   final String id;
-  final String fromId; // submitter's account id (routes the thread to them)
-  final String fromName; // submitter's display name
+  final String fromId; // submitter's account id (routes the thread; not shown)
+  final String fromRate; // submitter's rate/rank, e.g. "BM3" (no name — candor)
   final Role fromRole; // submitter's role
-  final String context; // the feature/screen they started it from
+  String context; // what it's about (editable by the submitter)
   final List<FeedbackMessage> messages; // chronological; [0] = original note
   bool readByOwner; // Kratos has seen the latest message
   bool readBySubmitter; // the submitter has seen the latest message
@@ -37,7 +37,7 @@ class FeedbackNote {
   FeedbackNote({
     required this.id,
     required this.fromId,
-    required this.fromName,
+    required this.fromRate,
     required this.fromRole,
     required this.context,
     required this.messages,
@@ -54,7 +54,7 @@ class FeedbackNote {
   Map<String, dynamic> toJson() => {
         'id': id,
         'fromId': fromId,
-        'fromName': fromName,
+        'fromRate': fromRate,
         'fromRole': fromRole.token,
         'context': context,
         'messages': messages.map((m) => m.toJson()).toList(),
@@ -66,7 +66,7 @@ class FeedbackNote {
   factory FeedbackNote.fromJson(Map<String, dynamic> j) => FeedbackNote(
         id: j['id'] as String,
         fromId: (j['fromId'] ?? '') as String,
-        fromName: (j['fromName'] ?? '') as String,
+        fromRate: (j['fromRate'] ?? '') as String,
         fromRole: roleFromToken((j['fromRole'] ?? 'technician') as String),
         context: (j['context'] ?? '') as String,
         messages: ((j['messages'] as List?) ?? [])

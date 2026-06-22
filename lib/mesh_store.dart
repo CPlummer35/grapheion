@@ -146,7 +146,9 @@ class MeshStore {
               }
             } else if (role == Role.kratos) {
               // submitter wrote — notify Kratos
-              onNotify('New feedback', '${note.fromName}: ${last.text}', peer);
+              onNotify('New feedback',
+                  '${note.fromRate.isEmpty ? note.fromRole.tag : note.fromRate}: ${last.text}',
+                  peer);
             }
           }
         }

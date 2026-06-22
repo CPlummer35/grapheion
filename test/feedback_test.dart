@@ -10,7 +10,7 @@ void main() {
     final f = FeedbackNote(
       id: 'fb-1',
       fromId: 'acct-7',
-      fromName: 'LTJG Smith',
+      fromRate: 'LTJG',
       fromRole: Role.divo,
       context: 'SKED',
       messages: [
@@ -24,7 +24,7 @@ void main() {
     );
     final back = FeedbackNote.fromJson(f.toJson());
     expect(back.fromId, 'acct-7');
-    expect(back.fromName, 'LTJG Smith');
+    expect(back.fromRate, 'LTJG');
     expect(back.context, 'SKED');
     expect(back.messages.length, 3);
     expect(back.preview, 'SKED is slick');
@@ -38,7 +38,7 @@ void main() {
     final f = FeedbackNote(
       id: 'fb-2',
       fromId: 'a',
-      fromName: 'n',
+      fromRate: 'BM3',
       fromRole: Role.technician,
       context: '',
       messages: [FeedbackMessage(fromOwner: false, text: 'x', atMs: 5)],
