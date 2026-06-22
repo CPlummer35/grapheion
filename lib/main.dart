@@ -1147,6 +1147,62 @@ class _HomePageState extends State<HomePage> {
     ));
   }
 
+  /// Seed a demo duty section — ~18 sailors (rate + name) pre-qualified across
+  /// the in-port watch stations, so Auto-generate produces a full bill instantly
+  /// for showing people. Stable ids, so re-running just refreshes them.
+  void _seedDemoCrew() {
+    // rate, name, role, [station qualifications they hold]
+    final crew = <(String, String, Role, List<String>)>[
+      ('LCDR', 'Reyes', Role.dh, ['q-cdo', 'q-oodip']),
+      ('LT', 'Donnelly', Role.divo, ['q-cdo', 'q-oodip', 'q-dutyeng']),
+      ('LTJG', 'Park', Role.divo, ['q-oodip', 'q-dutyeng']),
+      ('CWO3', 'Bauer', Role.divo, ['q-dutyeng', 'q-cdo']),
+      ('ENS', 'Carter', Role.divo, ['q-oodip']),
+      ('GSCS', 'Nakamura', Role.lpo, ['q-dutyeng', 'q-poow', 'q-sns']),
+      ('BM1', 'Flores', Role.wcs, ['q-poow', 'q-sns', 'q-sec']),
+      ('OS1', 'Patel', Role.wcs, ['q-poow', 'q-sec', 'q-moow']),
+      ('GM2', 'Sullivan', Role.technician, ['q-poow', 'q-sns', 'q-sec', 'q-moow']),
+      ('ET2', 'Brooks', Role.technician, ['q-poow', 'q-sec']),
+      ('MM2', 'Iverson', Role.technician, ['q-poow', 'q-sns', 'q-sec']),
+      ('OS2', 'Dunn', Role.technician, ['q-poow', 'q-sns', 'q-moow']),
+      ('BM3', 'Davis', Role.technician, ['q-moow', 'q-sns', 'q-sec']),
+      ('OS3', 'Nguyen', Role.technician, ['q-moow', 'q-sns', 'q-sec']),
+      ('FN', 'Castillo', Role.technician, ['q-moow', 'q-sns']),
+      ('SN', 'Whitaker', Role.technician, ['q-moow', 'q-sns']),
+      ('GSMFN', 'Abara', Role.technician, ['q-moow', 'q-sns', 'q-sec']),
+      ('SA', 'Rhodes', Role.technician, ['q-moow']),
+    ];
+    final wc = _org.workcenters.isNotEmpty ? _org.workcenters.keys.first : 'CP01';
+    const salt = 'grapheion-demo-crew';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (var i = 0; i < crew.length; i++) {
+      final c = crew[i];
+      final id = 'acct-demo-${i + 1}';
+      final a = Account(
+        id: id,
+        name: c.$2,
+        rate: c.$1,
+        role: c.$3,
+        workcenterId: wc,
+        pinSalt: salt,
+        pinHash: hashPin(salt, '0000'),
+        createdAtMs: now,
+      );
+      _accounts[id] = a;
+      final json = jsonEncode(a.toJson());
+      _node!.putRaw(kAccounts, id, json);
+      _bleBroadcast(kAccounts, id, json);
+      for (final st in c.$4) {
+        _setQual(id, st, QualStage.qualified);
+      }
+    }
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Seeded ${crew.length} demo crew — Auto-generate the bill')));
+    }
+  }
+
   /// Work-center members as (accountId, name), for assignment + quals.
   List<(String, String)> _watchPeople() {
     final wc = _workcenter;
@@ -2136,19 +2192,28 @@ class _HomePageState extends State<HomePage> {
       if (_canManageWatch)
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-          child: Row(children: [
-            FilledButton.tonalIcon(
-              onPressed: () => _autoFillBill(ev, day),
-              icon: const Icon(Icons.auto_fix_high, size: 18),
-              label: const Text('Auto-generate'),
-            ),
-            const SizedBox(width: 8),
-            TextButton.icon(
-              onPressed: () => _clearBill(ev, day),
-              icon: const Icon(Icons.clear_all, size: 18),
-              label: const Text('Clear'),
-            ),
-          ]),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: () => _autoFillBill(ev, day),
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                label: const Text('Auto-generate'),
+              ),
+              TextButton.icon(
+                onPressed: () => _clearBill(ev, day),
+                icon: const Icon(Icons.clear_all, size: 18),
+                label: const Text('Clear'),
+              ),
+              TextButton.icon(
+                onPressed: _seedDemoCrew,
+                icon: const Icon(Icons.group_add, size: 18),
+                label: const Text('Demo crew'),
+              ),
+            ],
+          ),
         ),
       const Divider(height: 1),
       Expanded(
