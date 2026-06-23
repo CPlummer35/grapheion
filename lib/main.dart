@@ -59,7 +59,7 @@ const _kOnlineWindowMs = 30 * 1000;
 const _kStaleWindowMs = 3 * 60 * 1000;
 
 /// How long a shared join code stays valid (demo-grade — a leaked code expires).
-const _kJoinTtlMs = 24 * 60 * 60 * 1000; // 24h
+const _kJoinTtlMs = 10 * 60 * 1000; // 10 min
 
 // CRDT-over-BLE 0xAF frame format (matches the peat BleBridge wire format):
 //   [0xAF][transport][collLen][collection][msgId:u32][fragIdx:u8][fragCount:u8][chunk]
@@ -3816,7 +3816,7 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 12),
               const Divider(height: 1),
               const SizedBox(height: 12),
-              const Text('…or send a join code (works anywhere, valid 24h)',
+              const Text('…or send a join code (works anywhere, valid 10 min)',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey, fontSize: 12)),
               const SizedBox(height: 8),
