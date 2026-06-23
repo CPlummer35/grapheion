@@ -94,17 +94,56 @@ class OrgChart {
 /// A seed org chart so a freshly-bootstrapped mesh isn't empty. The admin can
 /// extend it. (Generic placeholder structure — not a specific unit.)
 OrgChart seedOrgChart() {
-  final eng = Department(id: 'ENG', name: 'Engineering');
-  final mdiv = Division(id: 'M', name: 'M Division', departmentId: 'ENG');
-  final adiv = Division(id: 'A', name: 'A Division', departmentId: 'ENG');
+  final departments = <String, Department>{};
+  final divisions = <String, Division>{};
+  final workcenters = <String, WorkCenter>{};
+
+  void dept(String id, String name) =>
+      departments[id] = Department(id: id, name: name);
+  void div(String id, String name, String deptId) {
+    divisions[id] = Division(id: id, name: name, departmentId: deptId);
+    // One work center per division as the default assignment target (the
+    // watchbill + PQS hang off work centers).
+    workcenters['$id-WC'] = WorkCenter(id: '$id-WC', name: name, divisionId: id);
+  }
+
+  // CO -> XO -> Department Head -> DIVO.
+  dept('EXEC', 'Executive');
+  div('X', 'X (Admin)', 'EXEC');
+  div('NAV', 'Navigation', 'EXEC');
+  div('MED', 'Medical', 'EXEC');
+
+  dept('OPS', 'Operations');
+  div('OI', 'OI (CIC)', 'OPS');
+  div('OC', 'OC (Comms)', 'OPS');
+  div('OW', 'OW (EW)', 'OPS');
+
+  dept('CSYS', 'Combat Systems');
+  div('CA', 'CA (Aegis)', 'CSYS');
+  div('CE', 'CE (Electronics)', 'CSYS');
+  div('CG', 'CG (Ordnance)', 'CSYS');
+
+  dept('WEPS', 'Weapons');
+  div('1ST', '1st (Deck)', 'WEPS');
+  div('GUN', 'G (Gunnery)', 'WEPS');
+  div('ASW', 'AS (Anti-Submarine)', 'WEPS');
+
+  dept('ENG', 'Engineering');
+  div('EA', 'A (Auxiliaries)', 'ENG');
+  div('EE', 'E (Electrical)', 'ENG');
+  div('EM', 'M (Main Propulsion)', 'ENG');
+  div('ER', 'R (Repair / DC)', 'ENG');
+
+  dept('SUP', 'Supply');
+  div('S1', 'S-1 (Logistics)', 'SUP');
+  div('S2', 'S-2 (Food Service)', 'SUP');
+  div('S3', 'S-3 (Services)', 'SUP');
+  div('S4', 'S-4 (Disbursing)', 'SUP');
+
   return OrgChart(
-    departments: {'ENG': eng},
-    divisions: {'M': mdiv, 'A': adiv},
-    workcenters: {
-      'CP01': WorkCenter(id: 'CP01', name: 'Main Propulsion', divisionId: 'M'),
-      'CP02': WorkCenter(id: 'CP02', name: 'Aux Machinery', divisionId: 'M'),
-      'EA01': WorkCenter(id: 'EA01', name: 'A-Gang', divisionId: 'A'),
-    },
+    departments: departments,
+    divisions: divisions,
+    workcenters: workcenters,
   );
 }
 

@@ -6,8 +6,21 @@ import 'package:grapheion/domain/chain.dart';
 import 'package:grapheion/domain/org.dart';
 
 void main() {
-  // Seed org: ENG dept → M Division (CP01, CP02) + A Division (EA01).
-  final org = seedOrgChart();
+  // A minimal org (decoupled from the seeded chart): ENG dept → M Division
+  // (CP01, CP02) + A Division (EA01). Two WCs in M let us tell the WCS scope
+  // (one work center) apart from the DIVO scope (the whole division).
+  final org = OrgChart(
+    departments: {'ENG': Department(id: 'ENG', name: 'Engineering')},
+    divisions: {
+      'M': Division(id: 'M', name: 'M Division', departmentId: 'ENG'),
+      'A': Division(id: 'A', name: 'A Division', departmentId: 'ENG'),
+    },
+    workcenters: {
+      'CP01': WorkCenter(id: 'CP01', name: 'Main Propulsion', divisionId: 'M'),
+      'CP02': WorkCenter(id: 'CP02', name: 'Aux Machinery', divisionId: 'M'),
+      'EA01': WorkCenter(id: 'EA01', name: 'A-Gang', divisionId: 'A'),
+    },
+  );
 
   bool sees(Role role, String viewerWc, String jobWc, {bool ta = false}) =>
       canSeeJob(

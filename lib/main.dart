@@ -255,6 +255,8 @@ class _HomePageState extends State<HomePage> {
   int _watchDayOffset = 0; // watchbill: days from today
   String? _evolutionId; // watchbill: selected evolution (null = first)
   _AdminSort _adminSort = _AdminSort.name; // admin roster ordering
+  final TextEditingController _adminSearchCtrl =
+      TextEditingController(); // admin roster search
   final ValueNotifier<int> _feedbackTick = ValueNotifier(0); // refreshes open feedback sheet
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
@@ -1251,28 +1253,29 @@ class _HomePageState extends State<HomePage> {
   /// the in-port watch stations, so Auto-generate produces a full bill instantly
   /// for showing people. Stable ids, so re-running just refreshes them.
   void _seedDemoCrew() {
-    // rate, name, role, [station qualifications they hold]
-    final crew = <(String, String, Role, List<String>)>[
-      ('LCDR', 'Reyes', Role.dh, ['q-cdo', 'q-oodip']),
-      ('LT', 'Donnelly', Role.divo, ['q-cdo', 'q-oodip', 'q-dutyeng']),
-      ('LTJG', 'Park', Role.divo, ['q-oodip', 'q-dutyeng']),
-      ('CWO3', 'Bauer', Role.divo, ['q-dutyeng', 'q-cdo']),
-      ('ENS', 'Carter', Role.divo, ['q-oodip']),
-      ('GSCS', 'Nakamura', Role.lpo, ['q-dutyeng', 'q-poow', 'q-sns']),
-      ('BM1', 'Flores', Role.wcs, ['q-poow', 'q-sns', 'q-sec']),
-      ('OS1', 'Patel', Role.wcs, ['q-poow', 'q-sec', 'q-moow']),
-      ('GM2', 'Sullivan', Role.technician, ['q-poow', 'q-sns', 'q-sec', 'q-moow']),
-      ('ET2', 'Brooks', Role.technician, ['q-poow', 'q-sec']),
-      ('MM2', 'Iverson', Role.technician, ['q-poow', 'q-sns', 'q-sec']),
-      ('OS2', 'Dunn', Role.technician, ['q-poow', 'q-sns', 'q-moow']),
-      ('BM3', 'Davis', Role.technician, ['q-moow', 'q-sns', 'q-sec']),
-      ('OS3', 'Nguyen', Role.technician, ['q-moow', 'q-sns', 'q-sec']),
-      ('FN', 'Castillo', Role.technician, ['q-moow', 'q-sns']),
-      ('SN', 'Whitaker', Role.technician, ['q-moow', 'q-sns']),
-      ('GSMFN', 'Abara', Role.technician, ['q-moow', 'q-sns', 'q-sec']),
-      ('SA', 'Rhodes', Role.technician, ['q-moow']),
+    _ensureCanonicalOrg(); // guarantee the departments/divisions exist first
+    // rate, name, role, division id, [station qualifications they hold]
+    final crew = <(String, String, Role, String, List<String>)>[
+      ('LCDR', 'Reyes', Role.dh, 'EM', ['q-cdo', 'q-oodip']),
+      ('LT', 'Donnelly', Role.divo, 'CA', ['q-cdo', 'q-oodip', 'q-dutyeng']),
+      ('LTJG', 'Park', Role.divo, 'OI', ['q-oodip', 'q-dutyeng']),
+      ('CWO3', 'Bauer', Role.divo, 'EA', ['q-dutyeng', 'q-cdo']),
+      ('ENS', 'Carter', Role.divo, '1ST', ['q-oodip']),
+      ('GSCS', 'Nakamura', Role.lpo, 'EM', ['q-dutyeng', 'q-poow', 'q-sns']),
+      ('BM1', 'Flores', Role.wcs, '1ST', ['q-poow', 'q-sns', 'q-sec']),
+      ('OS1', 'Patel', Role.wcs, 'OI', ['q-poow', 'q-sec', 'q-moow']),
+      ('GM2', 'Sullivan', Role.technician, 'GUN',
+          ['q-poow', 'q-sns', 'q-sec', 'q-moow']),
+      ('ET2', 'Brooks', Role.technician, 'CE', ['q-poow', 'q-sec']),
+      ('MM2', 'Iverson', Role.technician, 'EA', ['q-poow', 'q-sns', 'q-sec']),
+      ('OS2', 'Dunn', Role.technician, 'OI', ['q-poow', 'q-sns', 'q-moow']),
+      ('BM3', 'Davis', Role.technician, '1ST', ['q-moow', 'q-sns', 'q-sec']),
+      ('OS3', 'Nguyen', Role.technician, 'OI', ['q-moow', 'q-sns', 'q-sec']),
+      ('FN', 'Castillo', Role.technician, 'EM', ['q-moow', 'q-sns']),
+      ('SN', 'Whitaker', Role.technician, '1ST', ['q-moow', 'q-sns']),
+      ('GSMFN', 'Abara', Role.technician, 'EM', ['q-moow', 'q-sns', 'q-sec']),
+      ('SA', 'Rhodes', Role.technician, '1ST', ['q-moow']),
     ];
-    final wc = _org.workcenters.isNotEmpty ? _org.workcenters.keys.first : 'CP01';
     const salt = 'grapheion-demo-crew';
     final now = DateTime.now().millisecondsSinceEpoch;
     for (var i = 0; i < crew.length; i++) {
@@ -1283,7 +1286,7 @@ class _HomePageState extends State<HomePage> {
         name: c.$2,
         rate: c.$1,
         role: c.$3,
-        workcenterId: wc,
+        workcenterId: '${c.$4}-WC',
         pinSalt: salt,
         pinHash: hashPin(salt, '0000'),
         createdAtMs: now,
@@ -1292,7 +1295,7 @@ class _HomePageState extends State<HomePage> {
       final json = jsonEncode(a.toJson());
       _node!.putRaw(kAccounts, id, json);
       _bleBroadcast(kAccounts, id, json);
-      for (final st in c.$4) {
+      for (final st in c.$5) {
         _setQual(id, st, QualStage.qualified);
       }
     }
@@ -1783,8 +1786,17 @@ class _HomePageState extends State<HomePage> {
   /// The mesh host (the DIVO who minted the key) seeds a starter org chart the
   /// first time it comes up, so the mesh isn't empty. Joiners receive it synced.
   void _seedOrgIfHost() {
-    // Runs at node start (before sign-in), so gate on host, not role.
-    if (!_isMeshHost || _org.workcenters.isNotEmpty) return;
+    // Runs at node start (before sign-in), so gate on host, not role. Re-seed
+    // when the current departments aren't present yet, so an existing mesh on
+    // an older org picks up the standard structure (overwrites by id; old extra
+    // work centers simply go unused).
+    if (!_isMeshHost || _org.departments.containsKey('EXEC')) return;
+    _ensureCanonicalOrg();
+  }
+
+  /// Write the canonical departments/divisions/work centers to the org + mesh
+  /// (idempotent — overwrites by id). The shared org-setup path.
+  void _ensureCanonicalOrg() {
     final seed = seedOrgChart();
     for (final d in seed.departments.values) {
       _org.departments[d.id] = d;
@@ -2549,8 +2561,13 @@ class _HomePageState extends State<HomePage> {
   /// Admin — the personnel hub for DIVO and up. Two shelves (Officer /
   /// Enlisted), each a roster of people with their division + qualifications.
   Widget _adminPage() {
-    final people =
-        _store.accounts.values.where((a) => a.role != Role.kratos).toList();
+    final q = _adminSearchCtrl.text.trim().toLowerCase();
+    final people = _store.accounts.values
+        .where((a) => a.role != Role.kratos)
+        .where((a) => q.isEmpty ||
+            '${a.rate} ${a.name}'.toLowerCase().contains(q) ||
+            _divisionName(a).toLowerCase().contains(q))
+        .toList();
     int byName(Account a, Account b) => a.name.compareTo(b.name);
     final officers = people.where(_isOfficer).toList()..sort(byName);
     final enlisted = people.where((a) => !_isOfficer(a)).toList()..sort(byName);
@@ -2561,6 +2578,25 @@ class _HomePageState extends State<HomePage> {
           Tab(text: 'OFFICER (${officers.length})'),
           Tab(text: 'ENLISTED (${enlisted.length})'),
         ]),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: TextField(
+            controller: _adminSearchCtrl,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Search name, rate, or division',
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: _adminSearchCtrl.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () => setState(() => _adminSearchCtrl.clear()),
+                    ),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+        ),
         _adminSortBar(),
         Expanded(
           child: TabBarView(
@@ -2691,9 +2727,8 @@ class _HomePageState extends State<HomePage> {
                 ),
               ]),
               const SizedBox(height: 16),
+              _infoRow('Department', _departmentName(a)),
               _infoRow('Division', _divisionName(a)),
-              _infoRow(
-                  'Work center', _org.workcenters[a.workcenterId]?.name ?? '—'),
               _infoRow('Duty section', '—  (coming soon)'),
               const SizedBox(height: 16),
               Text('Qualifications (${quals.length})',
@@ -2707,10 +2742,110 @@ class _HomePageState extends State<HomePage> {
                   runSpacing: 6,
                   children: [for (final q in quals) Chip(label: Text(q))],
                 ),
+              if (_canAdmin) ...[
+                const SizedBox(height: 16),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _openPersonEditor(a);
+                  },
+                  icon: const Icon(Icons.edit, size: 18),
+                  label: const Text('Edit role & assignment'),
+                ),
+              ],
               const SizedBox(height: 8),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Edit a person's role + department/division assignment (admins). Picking a
+  /// division sets the person's work center to that division's default WC, so
+  /// their department + division derive correctly everywhere.
+  void _openPersonEditor(Account a) {
+    var role = a.role;
+    final curWc = _org.workcenters[a.workcenterId];
+    var deptId =
+        curWc != null ? _org.divisions[curWc.divisionId]?.departmentId : null;
+    var divId = curWc?.divisionId;
+    final depts = _org.departments.values.toList()
+      ..sort((x, y) => x.name.compareTo(y.name));
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          final divs = _org.divisions.values
+              .where((d) => d.departmentId == deptId)
+              .toList()
+            ..sort((x, y) => x.name.compareTo(y.name));
+          if (!divs.any((d) => d.id == divId)) {
+            divId = divs.isNotEmpty ? divs.first.id : null;
+          }
+          return Padding(
+            padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Edit ${a.rate} ${a.name}',
+                    style: Theme.of(ctx).textTheme.titleLarge),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<Role>(
+                  initialValue: role,
+                  decoration: const InputDecoration(labelText: 'Role'),
+                  items: [
+                    for (final r in Role.values)
+                      if (r != Role.kratos)
+                        DropdownMenuItem(value: r, child: Text(r.title)),
+                  ],
+                  onChanged: (r) => setS(() => role = r ?? role),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: deptId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Department'),
+                  items: [
+                    for (final d in depts)
+                      DropdownMenuItem(value: d.id, child: Text(d.name)),
+                  ],
+                  onChanged: (v) => setS(() {
+                    deptId = v;
+                    divId = null; // reset; recomputed above on rebuild
+                  }),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: divId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Division'),
+                  items: [
+                    for (final d in divs)
+                      DropdownMenuItem(value: d.id, child: Text(d.name)),
+                  ],
+                  onChanged: (v) => setS(() => divId = v),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: () {
+                    a.role = role;
+                    if (divId != null) a.workcenterId = '$divId-WC';
+                    _updateAccount(a);
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
