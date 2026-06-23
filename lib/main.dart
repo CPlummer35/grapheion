@@ -215,6 +215,9 @@ class GrapheionApp extends StatelessWidget {
   }
 }
 
+/// How the Admin personnel roster is ordered.
+enum _AdminSort { name, division, department }
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override
@@ -248,6 +251,7 @@ class _HomePageState extends State<HomePage> {
   bool _featureOpen = false; // narrow layout: is a feature open (vs the menu)
   int _watchDayOffset = 0; // watchbill: days from today
   String? _evolutionId; // watchbill: selected evolution (null = first)
+  _AdminSort _adminSort = _AdminSort.name; // admin roster ordering
   final ValueNotifier<int> _feedbackTick = ValueNotifier(0); // refreshes open feedback sheet
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
@@ -1283,6 +1287,14 @@ class _HomePageState extends State<HomePage> {
     final wc = _org.workcenters[a.workcenterId];
     if (wc == null) return '—';
     return _org.divisions[wc.divisionId]?.name ?? '—';
+  }
+
+  /// The department name for a person (work center → division → department).
+  String _departmentName(Account a) {
+    final wc = _org.workcenters[a.workcenterId];
+    final div = wc == null ? null : _org.divisions[wc.divisionId];
+    if (div == null) return '—';
+    return _org.departments[div.departmentId]?.name ?? '—';
   }
 
   /// Qualification names a person currently holds (qualified stage).
@@ -2489,6 +2501,7 @@ class _HomePageState extends State<HomePage> {
           Tab(text: 'OFFICER (${officers.length})'),
           Tab(text: 'ENLISTED (${enlisted.length})'),
         ]),
+        _adminSortBar(),
         Expanded(
           child: TabBarView(
             physics: const NeverScrollableScrollPhysics(),
@@ -2498,6 +2511,27 @@ class _HomePageState extends State<HomePage> {
       ]),
     );
   }
+
+  Widget _adminSortBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: Row(children: [
+          const Text('Sort', style: TextStyle(color: Colors.grey)),
+          const SizedBox(width: 10),
+          for (final s in _AdminSort.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ChoiceChip(
+                label: Text(switch (s) {
+                  _AdminSort.name => 'A–Z',
+                  _AdminSort.division => 'Division',
+                  _AdminSort.department => 'Department',
+                }),
+                selected: _adminSort == s,
+                onSelected: (_) => setState(() => _adminSort = s),
+              ),
+            ),
+        ]),
+      );
 
   Widget _personnelList(List<Account> people) {
     if (people.isEmpty) {
@@ -2509,9 +2543,45 @@ class _HomePageState extends State<HomePage> {
         ),
       );
     }
-    return ListView.builder(
-      itemCount: people.length,
-      itemBuilder: (_, i) => _personnelTile(people[i]),
+    if (_adminSort == _AdminSort.name) {
+      final sorted = [...people]..sort((a, b) => a.name.compareTo(b.name));
+      return ListView.builder(
+        itemCount: sorted.length,
+        itemBuilder: (_, i) => _personnelTile(sorted[i]),
+      );
+    }
+    final keyOf =
+        _adminSort == _AdminSort.division ? _divisionName : _departmentName;
+    final groups = <String, List<Account>>{};
+    for (final a in people) {
+      (groups[keyOf(a)] ??= []).add(a);
+    }
+    final keys = groups.keys.toList()..sort();
+    final items = <Widget>[];
+    for (final k in keys) {
+      final members = groups[k]!..sort((a, b) => a.name.compareTo(b.name));
+      items.add(_groupHeader(k, members.length));
+      items.addAll(members.map(_personnelTile));
+    }
+    return ListView(children: items);
+  }
+
+  Widget _groupHeader(String title, int n) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      color: scheme.surfaceContainerHighest,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Row(children: [
+        Text(title.toUpperCase(),
+            style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+                color: scheme.primary,
+                letterSpacing: 0.5)),
+        const Spacer(),
+        Text('$n', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      ]),
     );
   }
 
