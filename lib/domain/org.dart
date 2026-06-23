@@ -162,6 +162,8 @@ class Account {
   String pinSalt;
   String pinHash; // sha256("$salt:$pin") — light auth, not a strong KDF
   String boundNodeId; // device this account is locked to ('' = any); Kratos uses it
+  String dutySection; // in-port duty section, e.g. "1".."5" ('' = unassigned)
+  String billet; // WQSB billet / assigned position (free text, '' = none)
   final int createdAtMs;
 
   Account({
@@ -173,6 +175,8 @@ class Account {
     required this.pinSalt,
     required this.pinHash,
     this.boundNodeId = '',
+    this.dutySection = '',
+    this.billet = '',
     required this.createdAtMs,
   }) : roleToken = role.token;
 
@@ -196,6 +200,8 @@ class Account {
         'pinSalt': pinSalt,
         'pinHash': pinHash,
         'boundNodeId': boundNodeId,
+        'dutySection': dutySection,
+        'billet': billet,
         'createdAtMs': createdAtMs,
       };
 
@@ -210,6 +216,8 @@ class Account {
       pinSalt: (j['pinSalt'] ?? '') as String,
       pinHash: (j['pinHash'] ?? '') as String,
       boundNodeId: (j['boundNodeId'] ?? '') as String,
+      dutySection: (j['dutySection'] ?? '') as String,
+      billet: (j['billet'] ?? '') as String,
       createdAtMs: (j['createdAtMs'] ?? 0) as int,
     )..roleToken = raw; // preserve the exact token, even if unknown to this build
   }

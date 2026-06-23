@@ -1291,6 +1291,7 @@ class _HomePageState extends State<HomePage> {
         rate: c.$1,
         role: c.$3,
         workcenterId: '${c.$4}-WC',
+        dutySection: '${(i % 5) + 1}', // spread across 5 in-port sections
         pinSalt: salt,
         pinHash: hashPin(salt, '0000'),
         createdAtMs: now,
@@ -2739,7 +2740,9 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 16),
               _infoRow('Department', _departmentName(a)),
               _infoRow('Division', _divisionName(a)),
-              _infoRow('Duty section', '—  (coming soon)'),
+              _infoRow('Duty section',
+                  a.dutySection.isEmpty ? '—' : 'Section ${a.dutySection}'),
+              _infoRow('Billet', a.billet.isEmpty ? '—' : a.billet),
               const SizedBox(height: 16),
               Text('Qualifications (${quals.length})',
                   style: Theme.of(ctx).textTheme.titleMedium),
@@ -2780,6 +2783,8 @@ class _HomePageState extends State<HomePage> {
     var deptId =
         curWc != null ? _org.divisions[curWc.divisionId]?.departmentId : null;
     var divId = curWc?.divisionId;
+    var dutySection = a.dutySection;
+    final billetCtrl = TextEditingController(text: a.billet);
     final depts = _org.departments.values.toList()
       ..sort((x, y) => x.name.compareTo(y.name));
     showModalBottomSheet(
@@ -2842,11 +2847,33 @@ class _HomePageState extends State<HomePage> {
                   ],
                   onChanged: (v) => setS(() => divId = v),
                 ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: dutySection.isEmpty ? null : dutySection,
+                  decoration:
+                      const InputDecoration(labelText: 'Duty section'),
+                  items: [
+                    const DropdownMenuItem(value: '', child: Text('—')),
+                    for (var s = 1; s <= 6; s++)
+                      DropdownMenuItem(value: '$s', child: Text('Section $s')),
+                  ],
+                  onChanged: (v) => setS(() => dutySection = v ?? ''),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: billetCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Billet',
+                    hintText: 'e.g. CSE Maintenance, 1st Div LPO',
+                  ),
+                ),
                 const SizedBox(height: 20),
                 FilledButton(
                   onPressed: () {
                     a.role = role;
                     if (divId != null) a.workcenterId = '$divId-WC';
+                    a.dutySection = dutySection;
+                    a.billet = billetCtrl.text.trim();
                     _updateAccount(a);
                     Navigator.pop(ctx);
                   },
