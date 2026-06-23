@@ -2061,8 +2061,14 @@ class _HomePageState extends State<HomePage> {
       );
 
   /// A feature icon, with an unread-count badge on the Feedback item (Kratos).
+  /// Features considered done for the v1 (target: 2026-09-01) — their rail icon
+  /// turns DU orange-red to mark them complete.
+  static const _v1Done = {'Feedback'};
+
   Widget _badgedIcon(IconData icon, String label, {Color? color, double? size}) {
-    final base = Icon(icon, color: color, size: size);
+    // A v1-complete feature shows its icon in the DU red.
+    final base = Icon(icon,
+        color: _v1Done.contains(label) ? _duOrange : color, size: size);
     if (label == 'Feedback' && _store.unreadFeedback > 0) {
       return Badge.count(count: _store.unreadFeedback, child: base);
     }
