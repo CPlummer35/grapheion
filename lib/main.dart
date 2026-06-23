@@ -58,6 +58,9 @@ const _kOnlineWindowMs = 30 * 1000;
 /// (clears stale ghosts left by reinstalls that churned a device's node id).
 const _kStaleWindowMs = 3 * 60 * 1000;
 
+/// How long a shared join code stays valid (demo-grade — a leaked code expires).
+const _kJoinTtlMs = 24 * 60 * 60 * 1000; // 24h
+
 // CRDT-over-BLE 0xAF frame format (matches the peat BleBridge wire format):
 //   [0xAF][transport][collLen][collection][msgId:u32][fragIdx:u8][fragCount:u8][chunk]
 // grapheion rides this in parallel with the Iroh path: each doc is broadcast as
@@ -824,23 +827,42 @@ class _HomePageState extends State<HomePage> {
     return s;
   }
 
-  /// Compact join token {node id, LAN addr, formation key} as base64(JSON).
-  /// The key is what gates membership — it only leaves the DIVO via this QR.
+  /// Compact join token as base64(JSON): node id, LAN addr (same-network),
+  /// relay addr (works off-network over the n0 relay), formation key, and an
+  /// expiry. The relay addr + expiry are what make this a shareable, demo-grade
+  /// "join code" you can send to someone anywhere. The key gates membership —
+  /// guard who you send it to, and it goes stale after [_kJoinTtlMs].
   String? _joinToken() {
     final node = _node;
+    if (node == null || _formationKey == null) return null;
     final addr = _dialAddr();
-    if (node == null || addr == null || _formationKey == null) return null;
-    return base64Encode(utf8.encode(
-        jsonEncode({'n': node.nodeId, 'a': addr, 'k': _formationKey})));
+    final relay = node.endpointAddr; // relay/derp form — reachable anywhere
+    return base64Encode(utf8.encode(jsonEncode({
+      'n': node.nodeId,
+      if (addr != null && addr.isNotEmpty) 'a': addr,
+      if (relay.isNotEmpty && relay != '—') 'r': relay,
+      'k': _formationKey,
+      'x': DateTime.now().millisecondsSinceEpoch + _kJoinTtlMs,
+    })));
   }
 
   /// Decode a scanned join token: adopt the mesh's formation key (starting or
   /// restarting our node under it), then dial the DIVO and remember it so the
   /// reconnect supervisor keeps the path up.
-  Future<void> _joinViaToken(String token) async {
+  Future<void> _joinViaToken(String raw) async {
     try {
-      final m = jsonDecode(utf8.decode(base64Decode(token.trim())))
+      var token = raw.trim();
+      // Accept a full join link too: grapheion://join?t=<code>
+      final t = Uri.tryParse(token)?.queryParameters['t'];
+      if (t != null && t.isNotEmpty) token = t;
+
+      final m = jsonDecode(utf8.decode(base64Decode(token)))
           as Map<String, dynamic>;
+      final exp = m['x'] as int?;
+      if (exp != null && DateTime.now().millisecondsSinceEpoch > exp) {
+        _snack('This join code has expired — ask for a fresh one');
+        return;
+      }
       final id = m['n'] as String?;
       final addr = m['a'] as String?;
       final relay = m['r'] as String?;
@@ -885,6 +907,41 @@ class _HomePageState extends State<HomePage> {
       MaterialPageRoute(builder: (_) => const _QrScanPage()),
     );
     if (token != null && token.isNotEmpty) await _joinViaToken(token);
+  }
+
+  /// Join by pasting the code an admin sent (the off-network path — works over
+  /// the relay from anywhere; the only way in on desktop, which has no camera).
+  void _promptJoinCode() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Enter join code'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: 'Paste the join code your admin sent you',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final code = ctrl.text.trim();
+              Navigator.pop(ctx);
+              if (code.isNotEmpty) _joinViaToken(code);
+            },
+            child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _snack(String msg) {
@@ -1858,7 +1915,10 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     // 1. Mesh membership: host a new mesh or scan a join QR.
     if (_formationKey == null) {
-      return _StartScreen(onHost: _hostMesh, onJoin: _openScanner);
+      return _StartScreen(
+          onHost: _hostMesh,
+          onJoin: _openScanner,
+          onJoinByCode: _promptJoinCode);
     }
     if (_error != null) {
       return Scaffold(body: Center(child: Text('Failed to start: $_error')));
@@ -3752,6 +3812,23 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ),
+            if (token != null) ...[
+              const SizedBox(height: 12),
+              const Divider(height: 1),
+              const SizedBox(height: 12),
+              const Text('…or send a join code (works anywhere, valid 24h)',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 12)),
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: token));
+                  _snack('Join code copied — send it to your sailor');
+                },
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text('Copy join code'),
+              ),
+            ],
           ]),
         ),
       );
@@ -4094,9 +4171,13 @@ class _HomePageState extends State<HomePage> {
 
 /// Mesh entry: host a new mesh (become its admin) or scan a join QR.
 class _StartScreen extends StatelessWidget {
-  const _StartScreen({required this.onHost, required this.onJoin});
+  const _StartScreen(
+      {required this.onHost,
+      required this.onJoin,
+      required this.onJoinByCode});
   final Future<void> Function() onHost;
   final Future<void> Function() onJoin;
+  final VoidCallback onJoinByCode;
 
   @override
   Widget build(BuildContext context) {
@@ -4126,8 +4207,18 @@ class _StartScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: onJoinByCode,
+                      icon: const Icon(Icons.keyboard),
+                      label: const Text('Enter a join code'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   const Text(
-                    "Scan your admin's QR to join the unit mesh.",
+                    "Scan your admin's QR, or paste a join code they sent — "
+                    'a code works from anywhere.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.grey, fontSize: 12),
                   ),
