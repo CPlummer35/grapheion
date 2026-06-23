@@ -126,7 +126,11 @@ final ValueNotifier<ThemeMode> grapheionThemeMode =
 ThemeData _grapheionTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
   final scheme = dark ? _duDark : _duLight;
-  final inter = GoogleFonts.interTextTheme();
+  // Base the fonts on a brightness-correct text theme so inherited text (e.g.
+  // dropdown items/values) is light on dark, not the default near-black.
+  final baseText =
+      dark ? Typography.material2021().white : Typography.material2021().black;
+  final inter = GoogleFonts.interTextTheme(baseText);
   // Teko (condensed display) for the big headings; Inter for everything else.
   TextStyle? teko(TextStyle? s) =>
       GoogleFonts.teko(textStyle: s, fontWeight: FontWeight.w600);
