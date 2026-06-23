@@ -1258,6 +1258,45 @@ class _HomePageState extends State<HomePage> {
   bool get _canManageWatch =>
       _role != null && _role != Role.technician && _role != Role.portEngineer;
 
+  // --- Admin (personnel hub) — DIVO and higher ------------------------------
+
+  /// DIVO and up may open the personnel hub.
+  bool get _canAdmin {
+    final r = _role;
+    return r == Role.divo ||
+        r == Role.dh ||
+        r == Role.threeMC ||
+        r == Role.portEngineer ||
+        r == Role.kratos;
+  }
+
+  static const _officerRates = {
+    'ENS', 'LTJG', 'LT', 'LCDR', 'CDR', 'CAPT', 'RADM', 'VADM', 'ADM',
+    'WO', 'WO1', 'CWO2', 'CWO3', 'CWO4', 'CWO5', 'CW2', 'CW3', 'CW4', 'CW5',
+  };
+
+  bool _isOfficer(Account a) =>
+      _officerRates.contains(a.rate.toUpperCase().trim());
+
+  /// The division name for a person (via their work center), or '—'.
+  String _divisionName(Account a) {
+    final wc = _org.workcenters[a.workcenterId];
+    if (wc == null) return '—';
+    return _org.divisions[wc.divisionId]?.name ?? '—';
+  }
+
+  /// Qualification names a person currently holds (qualified stage).
+  List<String> _personQuals(String personId) {
+    final out = <String>[];
+    for (final q in _store.quals.values) {
+      if (q.personId == personId && q.isQualified) {
+        out.add(_store.qualifications[q.qualId]?.name ?? q.qualId);
+      }
+    }
+    out.sort();
+    return out;
+  }
+
   // --- Feedback (anyone submits; only Kratos reads) -------------------------
 
   bool get _isKratos => _role == Role.kratos;
@@ -2041,8 +2080,11 @@ class _HomePageState extends State<HomePage> {
 
   /// The nav features for the signed-in role — Kratos additionally gets the
   /// Feedback inbox (the only role that can read it).
-  List<(IconData, String)> get _navFeatures =>
-      [..._features, if (_isKratos) (Icons.feedback, 'Feedback')];
+  List<(IconData, String)> get _navFeatures => [
+        ..._features,
+        if (_canAdmin) (Icons.admin_panel_settings, 'Admin'),
+        if (_isKratos) (Icons.feedback, 'Feedback'),
+      ];
 
   /// Left feature rail: a vertical, tappable list of features (scrolls if it
   /// can't all fit; content switches on tap — no swipe).
@@ -2107,6 +2149,8 @@ class _HomePageState extends State<HomePage> {
         return _watchbillPage();
       case 'PQS':
         return _pqsPage();
+      case 'Admin':
+        return _adminPage();
       case 'Feedback':
         return _feedbackPage();
       case 'Supply':
@@ -2429,6 +2473,129 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
+  /// Admin — the personnel hub for DIVO and up. Two shelves (Officer /
+  /// Enlisted), each a roster of people with their division + qualifications.
+  Widget _adminPage() {
+    final people =
+        _store.accounts.values.where((a) => a.role != Role.kratos).toList();
+    int byName(Account a, Account b) => a.name.compareTo(b.name);
+    final officers = people.where(_isOfficer).toList()..sort(byName);
+    final enlisted = people.where((a) => !_isOfficer(a)).toList()..sort(byName);
+    return DefaultTabController(
+      length: 2,
+      child: Column(children: [
+        TabBar(tabs: [
+          Tab(text: 'OFFICER (${officers.length})'),
+          Tab(text: 'ENLISTED (${enlisted.length})'),
+        ]),
+        Expanded(
+          child: TabBarView(
+            physics: const NeverScrollableScrollPhysics(),
+            children: [_personnelList(officers), _personnelList(enlisted)],
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _personnelList(List<Account> people) {
+    if (people.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text('No personnel here yet.',
+              style: TextStyle(color: Colors.grey)),
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: people.length,
+      itemBuilder: (_, i) => _personnelTile(people[i]),
+    );
+  }
+
+  Widget _personnelTile(Account a) {
+    final quals = _personQuals(a.id);
+    return ListTile(
+      leading: CircleAvatar(
+        radius: 18,
+        child: Text(a.name.isEmpty ? '?' : a.name[0].toUpperCase()),
+      ),
+      title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
+      subtitle: Text('${a.role.title} · ${_divisionName(a)}',
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: Text('${quals.length} qual${quals.length == 1 ? '' : 's'}',
+          style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      onTap: () => _openPersonSheet(a),
+    );
+  }
+
+  void _openPersonSheet(Account a) {
+    final quals = _personQuals(a.id);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                CircleAvatar(
+                    radius: 22,
+                    child: Text(a.name.isEmpty ? '?' : a.name[0].toUpperCase())),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}',
+                          style: Theme.of(ctx).textTheme.titleLarge),
+                      const SizedBox(height: 2),
+                      _Badge(a.role.tag, off: a.role.offShip),
+                    ],
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              _infoRow('Division', _divisionName(a)),
+              _infoRow(
+                  'Work center', _org.workcenters[a.workcenterId]?.name ?? '—'),
+              _infoRow('Duty section', '—  (coming soon)'),
+              const SizedBox(height: 16),
+              Text('Qualifications (${quals.length})',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              if (quals.isEmpty)
+                const Text('None yet', style: TextStyle(color: Colors.grey))
+              else
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [for (final q in quals) Chip(label: Text(q))],
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          SizedBox(
+              width: 110,
+              child: Text(label, style: const TextStyle(color: Colors.grey))),
+          Expanded(
+              child: Text(value,
+                  style: const TextStyle(fontWeight: FontWeight.w600))),
+        ]),
+      );
 
   /// PQS — each work-center member's progress across the whole qualification
   /// tree (designations first, then watch stations, knowledge, letters).
