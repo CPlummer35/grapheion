@@ -146,49 +146,27 @@ code/
 
 ## Run it on macOS
 
-### Prerequisites
+grapheion path-depends on the sibling `peat-flutter` package, which links a
+native Rust library (`peat-ffi`) built from the sibling `peat` workspace — so a
+bare clone won't build until those are in place. **The fastest path is the
+bootstrap script** (it clones the siblings, installs prerequisites, builds the
+native libraries, and fetches deps):
 
-- **Flutter** (3.9+), with macOS desktop enabled
-  (`flutter config --enable-macos-desktop`).
-- **Xcode** + command-line tools.
-- **Rust** with the macOS targets:
-  ```sh
-  rustup target add aarch64-apple-darwin x86_64-apple-darwin
-  ```
-- **protoc** (`brew install protobuf`).
-- The `peat` and `peat-flutter` repos checked out as **siblings** of `grapheion`
-  (see layout above).
+```sh
+./scripts/bootstrap-macos.sh
+flutter run -d macos
+```
 
-### Steps
+For the manual steps, prerequisites, and troubleshooting, see **[SETUP.md](SETUP.md)**.
 
-1. **Build the peat-ffi native library for macOS.** This produces the
-   `libpeat_ffi.dylib` the app links, from the Rust workspace:
-   ```sh
-   cd ../peat-flutter
-   bash macos/build-rust.sh
-   ```
-   (It writes `peat-flutter/macos/Frameworks/libpeat_ffi.dylib`.)
-
-2. **Fetch Dart dependencies** for grapheion:
-   ```sh
-   cd ../grapheion
-   flutter pub get
-   ```
-
-3. **Run the app on macOS:**
-   ```sh
-   flutter run -d macos
-   ```
-
-4. **Use it.** On first launch, sign in with a name, work center (default
-   `CP01`), and a role:
-   - Log in as **DIVO** on one instance → open the **Connection** feature → it
-     shows the **join QR**.
-   - Log in as another role on a second instance/device → **Connection** →
-     **Scan join QR** → point at the DIVO's QR to join the mesh.
-   - Originate a job as a technician in **CSMP** and walk it up the chain (use the
-     logout icon to switch roles on one machine). Try **SKED → Load example:
-     Bicycle PMS**, then drag a check onto a day.
+**Use it.** On first launch, sign in with a name, work center, and a role:
+- Log in as **DIVO** on one instance → open the **Connection** feature → it shows
+  the **join QR** and a **Copy join code** button.
+- On a second instance/device → **Connection → Scan join QR** (same network), or
+  on the start screen **Enter a join code** to join from anywhere over the relay.
+- Originate a job as a technician in **CSMP** and walk it up the chain (use the
+  logout icon to switch roles on one machine). Try **SKED → Load example:
+  Bicycle PMS**, then drag a check onto a day.
 
 > Tip: to drive the whole flow on a single Mac, run a second instance in another
 > terminal with `flutter run -d macos` and log it in as a different role, or use
