@@ -247,6 +247,7 @@ class _HomePageState extends State<HomePage> {
   int _feature = 0; // selected feature (CSMP/SKED/CASREP/…)
   bool _featureOpen = false; // narrow layout: is a feature open (vs the menu)
   int _watchDayOffset = 0; // watchbill: days from today
+  String? _evolutionId; // watchbill: selected evolution (null = first)
   final ValueNotifier<int> _feedbackTick = ValueNotifier(0); // refreshes open feedback sheet
 
   // Mesh presence transports (node-derived; the peer set itself is in the store).
@@ -1030,6 +1031,49 @@ class _HomePageState extends State<HomePage> {
     for (final s in slots) {
       _setBillEntry(dayMs, ev.id, s.roleId, s.shiftId, fill[s.key]);
     }
+  }
+
+  /// Create + sync a new watch-station qualification (used by the evolution
+  /// editor when a role needs a station that doesn't exist yet).
+  Qualification _createStation(String name, String abbr) {
+    final base = name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'(^-|-$)'), '');
+    var id = 'q-$base';
+    var n = 1;
+    while (_store.qualifications.containsKey(id)) {
+      id = 'q-$base-${n++}';
+    }
+    final q = Qualification(
+      id: id,
+      abbr: abbr.isEmpty ? name : abbr,
+      name: name,
+      type: QualType.watchStation,
+      inPort: true,
+      order: _store.qualifications.length,
+    );
+    _saveQualification(q);
+    return q;
+  }
+
+  /// Open the evolution editor for [ev] (null = create a new evolution).
+  void _openEvolutionEditor(Evolution? ev) {
+    final stations = _store.qualifications.values
+        .where((q) => q.isWatchStation)
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => _EvolutionEditorPage(
+        initial: ev,
+        stations: stations,
+        onCreateStation: _createStation,
+        onSave: (e) {
+          _saveEvolution(e);
+          if (mounted) setState(() => _evolutionId = e.id);
+        },
+      ),
+    ));
   }
 
   /// Seed the default qualification tree — in-port watch stations + the SWO
@@ -2155,26 +2199,67 @@ class _HomePageState extends State<HomePage> {
                 icon: const Icon(Icons.anchor),
                 label: const Text('Load In-Port Duty + stations'),
               ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: () => _openEvolutionEditor(null),
+                icon: const Icon(Icons.add),
+                label: const Text('New evolution'),
+              ),
             ],
           ]),
         ),
       );
     }
-    final ev = evos.first; // one evolution (In-Port Duty) for now
+    final ev = evos.firstWhere((e) => e.id == _evolutionId,
+        orElse: () => evos.first);
     final day = startOfDay(DateTime.now().millisecondsSinceEpoch) +
         _watchDayOffset * 86400000;
     final roles = ev.roles.toList()..sort((a, b) => a.order.compareTo(b.order));
     return Column(children: [
+      // Evolution selector + edit / new (admins).
+      Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+        child: Row(children: [
+          Expanded(
+            child: DropdownButton<String>(
+              isExpanded: true,
+              underline: const SizedBox.shrink(),
+              value: ev.id,
+              items: [
+                for (final e in evos)
+                  DropdownMenuItem(
+                    value: e.id,
+                    child: Text(e.name,
+                        style: Theme.of(context).textTheme.titleMedium,
+                        overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _evolutionId = v),
+            ),
+          ),
+          if (_canManageWatch) ...[
+            IconButton(
+              tooltip: 'Edit evolution',
+              icon: const Icon(Icons.edit, size: 20),
+              onPressed: () => _openEvolutionEditor(ev),
+            ),
+            IconButton(
+              tooltip: 'New evolution',
+              icon: const Icon(Icons.add),
+              onPressed: () => _openEvolutionEditor(null),
+            ),
+          ],
+        ]),
+      ),
       Row(children: [
         IconButton(
             onPressed: () => setState(() => _watchDayOffset--),
             icon: const Icon(Icons.chevron_left)),
         Expanded(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(ev.name, style: Theme.of(context).textTheme.titleMedium),
-            Text('${weekdayLabel(day)}  ${_shortDate(day)}',
-                style: const TextStyle(color: Colors.grey, fontSize: 12)),
-          ]),
+          child: Center(
+            child: Text('${weekdayLabel(day)}  ${_shortDate(day)}',
+                style: const TextStyle(color: Colors.grey, fontSize: 13)),
+          ),
         ),
         IconButton(
             onPressed: () => setState(() => _watchDayOffset++),
@@ -4505,6 +4590,389 @@ class _QrScanPageState extends State<_QrScanPage> {
               style: TextStyle(color: Colors.white, fontSize: 16)),
         ),
       ]),
+    );
+  }
+}
+
+/// Editor to create or edit an evolution — its name, the watchstations (roles)
+/// it requires (each standing or rotating), and the rotation shifts.
+class _EvolutionEditorPage extends StatefulWidget {
+  final Evolution? initial;
+  final List<Qualification> stations;
+  final Qualification Function(String name, String abbr) onCreateStation;
+  final void Function(Evolution) onSave;
+
+  const _EvolutionEditorPage({
+    required this.initial,
+    required this.stations,
+    required this.onCreateStation,
+    required this.onSave,
+  });
+
+  @override
+  State<_EvolutionEditorPage> createState() => _EvolutionEditorPageState();
+}
+
+class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
+  late final TextEditingController _name;
+  late bool _inPort;
+  late List<WatchShift> _shifts;
+  late List<EvolutionRole> _roles;
+  late List<Qualification> _stations; // local; grows as new stations are made
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.initial;
+    _name = TextEditingController(text: e?.name ?? '');
+    _inPort = e?.inPort ?? true;
+    _shifts = e == null
+        ? _defaultShifts()
+        : e.shifts
+            .map((s) => WatchShift(
+                id: s.id, label: s.label, start: s.start, end: s.end))
+            .toList();
+    _roles = (e?.roles ?? [])
+        .map((r) => EvolutionRole(
+            id: r.id,
+            stationId: r.stationId,
+            name: r.name,
+            rotating: r.rotating,
+            order: r.order))
+        .toList();
+    _stations = [...widget.stations];
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  List<WatchShift> _defaultShifts() {
+    const t = [
+      ['1', '0630', '1130'],
+      ['2', '1130', '1630'],
+      ['3', '1630', '2130'],
+      ['4', '2130', '0130'],
+      ['5', '0130', '0630'],
+    ];
+    return [
+      for (var i = 0; i < t.length; i++)
+        WatchShift(id: 's${i + 1}', label: t[i][0], start: t[i][1], end: t[i][2])
+    ];
+  }
+
+  String _stationName(String id) {
+    for (final s in _stations) {
+      if (s.id == id) return s.name;
+    }
+    return id;
+  }
+
+  void _save() {
+    final nm = _name.text.trim();
+    if (nm.isEmpty) {
+      _toast('Name the evolution');
+      return;
+    }
+    if (_roles.isEmpty) {
+      _toast('Add at least one role');
+      return;
+    }
+    for (var i = 0; i < _roles.length; i++) {
+      _roles[i].order = i;
+    }
+    widget.onSave(Evolution(
+      id: widget.initial?.id ??
+          'ev-${DateTime.now().microsecondsSinceEpoch}',
+      name: nm,
+      inPort: _inPort,
+      shifts: _shifts,
+      roles: _roles,
+      order: widget.initial?.order ?? 0,
+    ));
+    Navigator.pop(context);
+  }
+
+  void _toast(String m) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  @override
+  Widget build(BuildContext context) {
+    final hasRotating = _roles.any((r) => r.rotating);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.initial == null ? 'New evolution' : 'Edit evolution'),
+        actions: [
+          TextButton(
+            onPressed: _save,
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        TextField(
+          controller: _name,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Evolution name',
+            hintText: 'e.g. Sea and Anchor Detail',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: _inPort,
+          onChanged: (v) => setState(() => _inPort = v),
+          title: const Text('In port'),
+          subtitle: const Text('Off = an underway evolution'),
+        ),
+        const SizedBox(height: 8),
+        _sectionHeader('Roles', () => _editRole(null)),
+        if (_roles.isEmpty)
+          _hint('Add the watchstations this evolution requires.'),
+        for (final r in _roles)
+          ListTile(
+            dense: true,
+            leading: Icon(
+                r.rotating ? Icons.sync : Icons.push_pin,
+                size: 18,
+                color: Theme.of(context).colorScheme.primary),
+            title: Text(r.name),
+            subtitle: Text(
+                '${_stationName(r.stationId)} · ${r.rotating ? 'Rotating' : 'Standing'}'),
+            trailing: IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20),
+              onPressed: () => setState(() => _roles.remove(r)),
+            ),
+            onTap: () => _editRole(r),
+          ),
+        const SizedBox(height: 16),
+        _sectionHeader('Rotation shifts', () => _editShift(null)),
+        _hint(hasRotating
+            ? 'Rotating roles are split across these shifts; standing roles ignore them.'
+            : 'Only used once a role is set to Rotating.'),
+        for (final s in _shifts)
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.schedule, size: 18),
+            title: Text('Section ${s.label}'),
+            subtitle: Text('${s.start}–${s.end}'),
+            trailing: IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20),
+              onPressed: () => setState(() => _shifts.remove(s)),
+            ),
+            onTap: () => _editShift(s),
+          ),
+        const SizedBox(height: 24),
+      ]),
+    );
+  }
+
+  Widget _sectionHeader(String title, VoidCallback onAdd) => Row(
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: onAdd,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('Add'),
+          ),
+        ],
+      );
+
+  Widget _hint(String t) => Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(t, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      );
+
+  void _editRole(EvolutionRole? existing) {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    String? stationId = existing?.stationId ??
+        (_stations.isNotEmpty ? _stations.first.id : null);
+    bool rotating = existing?.rotating ?? false;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: Text(existing == null ? 'Add role' : 'Edit role'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: nameCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                    labelText: 'Role name',
+                    hintText: 'e.g. Officer of the Deck'),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: stationId,
+                    hint: const Text('Watch station'),
+                    items: [
+                      for (final s in _stations)
+                        DropdownMenuItem(
+                            value: s.id,
+                            child: Text(s.name,
+                                overflow: TextOverflow.ellipsis)),
+                    ],
+                    onChanged: (v) => setD(() => stationId = v),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'New station',
+                  icon: const Icon(Icons.add_circle_outline),
+                  onPressed: () async {
+                    final created = await _promptNewStation(ctx);
+                    if (created != null) {
+                      setD(() {
+                        _stations.add(created);
+                        stationId = created.id;
+                      });
+                    }
+                  },
+                ),
+              ]),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: rotating,
+                onChanged: (v) => setD(() => rotating = v),
+                title: const Text('Rotating'),
+                subtitle: const Text('Sectioned across the shifts'),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                final nm = nameCtrl.text.trim();
+                if (nm.isEmpty || stationId == null) return;
+                setState(() {
+                  if (existing == null) {
+                    _roles.add(EvolutionRole(
+                      id: 'r-${DateTime.now().microsecondsSinceEpoch}',
+                      stationId: stationId!,
+                      name: nm,
+                      rotating: rotating,
+                      order: _roles.length,
+                    ));
+                  } else {
+                    existing.name = nm;
+                    existing.stationId = stationId!;
+                    existing.rotating = rotating;
+                  }
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<Qualification?> _promptNewStation(BuildContext ctx) {
+    final nameCtrl = TextEditingController();
+    final abbrCtrl = TextEditingController();
+    return showDialog<Qualification>(
+      context: ctx,
+      builder: (c) => AlertDialog(
+        title: const Text('New watch station'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: nameCtrl,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(labelText: 'Station name'),
+          ),
+          TextField(
+            controller: abbrCtrl,
+            textCapitalization: TextCapitalization.characters,
+            decoration:
+                const InputDecoration(labelText: 'Abbreviation (optional)'),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final nm = nameCtrl.text.trim();
+              if (nm.isEmpty) return;
+              Navigator.pop(c, widget.onCreateStation(nm, abbrCtrl.text.trim()));
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editShift(WatchShift? existing) {
+    final labelCtrl =
+        TextEditingController(text: existing?.label ?? '${_shifts.length + 1}');
+    final startCtrl = TextEditingController(text: existing?.start ?? '');
+    final endCtrl = TextEditingController(text: existing?.end ?? '');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(existing == null ? 'Add shift' : 'Edit shift'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: labelCtrl,
+            decoration: const InputDecoration(labelText: 'Section label'),
+          ),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: startCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Start (0630)'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: endCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'End (1130)'),
+              ),
+            ),
+          ]),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              setState(() {
+                if (existing == null) {
+                  _shifts.add(WatchShift(
+                    id: 's${DateTime.now().microsecondsSinceEpoch}',
+                    label: labelCtrl.text.trim(),
+                    start: startCtrl.text.trim(),
+                    end: endCtrl.text.trim(),
+                  ));
+                } else {
+                  existing.label = labelCtrl.text.trim();
+                  existing.start = startCtrl.text.trim();
+                  existing.end = endCtrl.text.trim();
+                }
+              });
+              Navigator.pop(ctx);
+            },
+            child: const Text('Done'),
+          ),
+        ],
+      ),
     );
   }
 }
