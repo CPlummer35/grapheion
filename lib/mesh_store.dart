@@ -10,6 +10,7 @@
 
 import 'dart:convert';
 
+import 'domain/bulletin.dart';
 import 'domain/casrep.dart';
 import 'domain/chain.dart';
 import 'domain/feedback.dart';
@@ -32,7 +33,9 @@ const kQualifications = 'qualifications'; // qual tree nodes (watch/knowledge/�
 const kQuals = 'quals'; // PQS progress (person x qualification)
 const kEvolutions = 'evolutions'; // evolutions (role sets, e.g. In-Port Duty)
 const kBill = 'watchbill'; // bill entries (day x evolution x role x shift)
-const kFeedback = 'feedback'; // demo feedback (anyone writes, only Kratos reads)
+const kBulletin = 'bulletin'; // duty-section bulletin posts
+const kFeedback =
+    'feedback'; // demo feedback (anyone writes, only Kratos reads)
 
 /// A peer seen on the mesh, from its presence beat.
 class Peer {
@@ -65,6 +68,7 @@ class MeshStore {
   final Map<String, PersonQual> quals = {}; // keyed by PersonQual.makeId
   final Map<String, Evolution> evolutions = {};
   final Map<String, BillEntry> bill = {}; // keyed by BillEntry.makeId
+  final Map<String, BulletinPost> bulletin = {};
   final Map<String, FeedbackNote> feedback = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
@@ -91,8 +95,13 @@ class MeshStore {
 
   /// Apply one inbound document (from Iroh subscribeChanges OR a BLE frame).
   /// Notifies via [onNotify] only for remote changes.
-  void applyDoc(String coll, String docId, String raw,
-      {required bool remote, String? peer}) {
+  void applyDoc(
+    String coll,
+    String docId,
+    String raw, {
+    required bool remote,
+    String? peer,
+  }) {
     try {
       if (coll == kJobs) {
         final job = Job.fromJson(jsonDecode(raw) as Map<String, dynamic>);
@@ -116,20 +125,25 @@ class MeshStore {
           restoreAccount(); // our account may have just arrived (first sign-in)
         }
       } else if (coll == kCasreps) {
-        casreps[docId] =
-            Casrep.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        casreps[docId] = Casrep.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
       } else if (coll == kPmsChecks) {
-        pmsChecks[docId] =
-            PmsCheck.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        pmsChecks[docId] = PmsCheck.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
       } else if (coll == kQualifications) {
-        qualifications[docId] =
-            Qualification.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        qualifications[docId] = Qualification.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
       } else if (coll == kQuals) {
-        quals[docId] =
-            PersonQual.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        quals[docId] = PersonQual.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
       } else if (coll == kEvolutions) {
-        evolutions[docId] =
-            Evolution.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        evolutions[docId] = Evolution.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
       } else if (coll == kBill) {
         final e = BillEntry.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final old = bill[docId];
@@ -139,9 +153,19 @@ class MeshStore {
         if (old == null || e.updatedAtMs >= old.updatedAtMs) {
           bill[docId] = e;
         }
+      } else if (coll == kBulletin) {
+        final p = BulletinPost.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        if (p.text.isEmpty) {
+          bulletin.remove(docId); // tombstone (a deleted post)
+        } else {
+          bulletin[docId] = p;
+        }
       } else if (coll == kFeedback) {
-        final note =
-            FeedbackNote.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final note = FeedbackNote.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
         if (note.messages.isEmpty) {
           feedback.remove(docId); // tombstone — a delete
         } else {
@@ -157,9 +181,11 @@ class MeshStore {
               }
             } else if (role == Role.kratos) {
               // submitter wrote — notify Kratos
-              onNotify('New feedback',
-                  '${note.fromRate.isEmpty ? note.fromRole.tag : note.fromRate}: ${last.text}',
-                  peer);
+              onNotify(
+                'New feedback',
+                '${note.fromRate.isEmpty ? note.fromRole.tag : note.fromRate}: ${last.text}',
+                peer,
+              );
             }
           }
         }
@@ -168,11 +194,17 @@ class MeshStore {
   }
 
   /// Feedback threads, most-recently-active first (for the Kratos inbox).
-  List<FeedbackNote> feedbackNewestFirst() => feedback.values.toList()
-    ..sort((a, b) => b.lastActivityMs.compareTo(a.lastActivityMs));
+  List<FeedbackNote> feedbackNewestFirst() =>
+      feedback.values.toList()
+        ..sort((a, b) => b.lastActivityMs.compareTo(a.lastActivityMs));
 
   /// Threads with an unread message for Kratos (drives the rail badge).
   int get unreadFeedback => feedback.values.where((f) => !f.readByOwner).length;
+
+  /// A duty section's bulletin posts, oldest first.
+  List<BulletinPost> bulletinForSection(String section) =>
+      bulletin.values.where((p) => p.section == section).toList()
+        ..sort((a, b) => a.atMs.compareTo(b.atMs));
 
   // --- Watchbill / PQS queries ---------------------------------------------
 
@@ -199,8 +231,11 @@ class MeshStore {
   /// Who is posted to [roleId]/[shiftId] on [dayMs]'s instance of [evolutionId]
   /// (null/'' if unassigned).
   String? billAssignee(
-          int dayMs, String evolutionId, String roleId, String shiftId) =>
-      bill[BillEntry.makeId(dayMs, evolutionId, roleId, shiftId)]?.personId;
+    int dayMs,
+    String evolutionId,
+    String roleId,
+    String shiftId,
+  ) => bill[BillEntry.makeId(dayMs, evolutionId, roleId, shiftId)]?.personId;
 
   void applyOrg(String coll, String raw) {
     try {
@@ -285,13 +320,15 @@ class MeshStore {
     }
   }
 
-  bool hasCasrep(String jobId) =>
-      casreps.values.any((c) => c.jobId == jobId && c.type != CasrepType.cancel);
+  bool hasCasrep(String jobId) => casreps.values.any(
+    (c) => c.jobId == jobId && c.type != CasrepType.cancel,
+  );
 
   Casrep? casrepForJob(String jobId) {
     try {
-      return casreps.values
-          .firstWhere((c) => c.jobId == jobId && c.type != CasrepType.cancel);
+      return casreps.values.firstWhere(
+        (c) => c.jobId == jobId && c.type != CasrepType.cancel,
+      );
     } catch (_) {
       return null;
     }
@@ -328,9 +365,10 @@ class MeshStore {
         !hasCasrep(job.id) &&
         (old == null || old.priority != job.priority)) {
       onNotify(
-          title,
-          'priority ${job.priority} — write a CASREP (${casrepCategoryLabel(job.priority)})',
-          peer);
+        title,
+        'priority ${job.priority} — write a CASREP (${casrepCategoryLabel(job.priority)})',
+        peer,
+      );
       return;
     }
     final mineNow = needsMyAction(job);
@@ -361,6 +399,7 @@ class MeshStore {
     quals.clear();
     evolutions.clear();
     bill.clear();
+    bulletin.clear();
     feedback.clear();
     org.departments.clear();
     org.divisions.clear();

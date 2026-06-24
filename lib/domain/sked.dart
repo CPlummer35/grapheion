@@ -94,8 +94,10 @@ extension PeriodicityInfo on Periodicity {
 }
 
 String periodicityToken(Periodicity p) => p.name;
-Periodicity periodicityFromToken(String s) => Periodicity.values
-    .firstWhere((p) => p.name == s, orElse: () => Periodicity.monthly);
+Periodicity periodicityFromToken(String s) => Periodicity.values.firstWhere(
+  (p) => p.name == s,
+  orElse: () => Periodicity.monthly,
+);
 
 /// Derived calendar state of a check at a given moment.
 enum PmsStatus { scheduled, due, overdue }
@@ -146,21 +148,20 @@ class PmsCheck {
     required Periodicity periodicity,
     required int estMinutes,
     required int nowMs,
-  }) =>
-      PmsCheck(
-        id: id,
-        mip: mip,
-        seq: seq,
-        title: title,
-        ein: ein,
-        workcenter: workcenter,
-        periodicity: periodicity,
-        estMinutes: estMinutes,
-        lastDoneMs: null,
-        lastBy: '',
-        createdAtMs: nowMs,
-        updatedAtMs: nowMs,
-      );
+  }) => PmsCheck(
+    id: id,
+    mip: mip,
+    seq: seq,
+    title: title,
+    ein: ein,
+    workcenter: workcenter,
+    periodicity: periodicity,
+    estMinutes: estMinutes,
+    lastDoneMs: null,
+    lastBy: '',
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
+  );
 
   /// The MRC code within its MIP: periodicity code + sequence, e.g. "M-1".
   String get mrcCode => '${periodicity.code}-$seq';
@@ -197,40 +198,41 @@ class PmsCheck {
   int daysUntilDue(int nowMs) => ((nextDueMs - nowMs) / _day).floor();
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'mip': mip,
-        'seq': seq,
-        'title': title,
-        'ein': ein,
-        'workcenter': workcenter,
-        'periodicity': periodicityToken(periodicity),
-        'estMinutes': estMinutes,
-        'lastDoneMs': lastDoneMs,
-        'lastBy': lastBy,
-        'doneDays': doneDays,
-        'assignedTo': assignedTo,
-        'scheduledForMs': scheduledForMs,
-        'createdAtMs': createdAtMs,
-        'updatedAtMs': updatedAtMs,
-      };
+    'id': id,
+    'mip': mip,
+    'seq': seq,
+    'title': title,
+    'ein': ein,
+    'workcenter': workcenter,
+    'periodicity': periodicityToken(periodicity),
+    'estMinutes': estMinutes,
+    'lastDoneMs': lastDoneMs,
+    'lastBy': lastBy,
+    'doneDays': doneDays,
+    'assignedTo': assignedTo,
+    'scheduledForMs': scheduledForMs,
+    'createdAtMs': createdAtMs,
+    'updatedAtMs': updatedAtMs,
+  };
 
   factory PmsCheck.fromJson(Map<String, dynamic> j) => PmsCheck(
-        id: j['id'] as String,
-        // Back-compat: older docs used a free-text 'mrc' field for the number.
-        mip: (j['mip'] ?? j['mrc'] ?? '') as String,
-        seq: (j['seq'] ?? 1) as int,
-        title: (j['title'] ?? '') as String,
-        ein: (j['ein'] ?? '') as String,
-        workcenter: (j['workcenter'] ?? '') as String,
-        periodicity:
-            periodicityFromToken((j['periodicity'] ?? 'monthly') as String),
-        estMinutes: (j['estMinutes'] ?? 0) as int,
-        lastDoneMs: j['lastDoneMs'] as int?,
-        lastBy: (j['lastBy'] ?? '') as String,
-        doneDays: (j['doneDays'] as List?)?.map((e) => e as int).toList(),
-        assignedTo: (j['assignedTo'] ?? '') as String,
-        scheduledForMs: j['scheduledForMs'] as int?,
-        createdAtMs: (j['createdAtMs'] ?? 0) as int,
-        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    // Back-compat: older docs used a free-text 'mrc' field for the number.
+    mip: (j['mip'] ?? j['mrc'] ?? '') as String,
+    seq: (j['seq'] ?? 1) as int,
+    title: (j['title'] ?? '') as String,
+    ein: (j['ein'] ?? '') as String,
+    workcenter: (j['workcenter'] ?? '') as String,
+    periodicity: periodicityFromToken(
+      (j['periodicity'] ?? 'monthly') as String,
+    ),
+    estMinutes: (j['estMinutes'] ?? 0) as int,
+    lastDoneMs: j['lastDoneMs'] as int?,
+    lastBy: (j['lastBy'] ?? '') as String,
+    doneDays: (j['doneDays'] as List?)?.map((e) => e as int).toList(),
+    assignedTo: (j['assignedTo'] ?? '') as String,
+    scheduledForMs: j['scheduledForMs'] as int?,
+    createdAtMs: (j['createdAtMs'] ?? 0) as int,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+  );
 }

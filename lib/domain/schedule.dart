@@ -11,7 +11,11 @@ int startOfDay(int ms) {
 int startOfWeek(int ms) {
   final d = DateTime.fromMillisecondsSinceEpoch(ms);
   // DateTime.weekday: Mon = 1 .. Sun = 7. Back up to this week's Monday.
-  return DateTime(d.year, d.month, d.day - (d.weekday - 1)).millisecondsSinceEpoch;
+  return DateTime(
+    d.year,
+    d.month,
+    d.day - (d.weekday - 1),
+  ).millisecondsSinceEpoch;
 }
 
 /// The 7 day-start timestamps of [ms]'s week, Monday..Sunday.
@@ -19,7 +23,7 @@ List<int> weekDays(int ms) {
   final s = DateTime.fromMillisecondsSinceEpoch(startOfWeek(ms));
   return [
     for (var i = 0; i < 7; i++)
-      DateTime(s.year, s.month, s.day + i).millisecondsSinceEpoch
+      DateTime(s.year, s.month, s.day + i).millisecondsSinceEpoch,
   ];
 }
 

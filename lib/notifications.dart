@@ -43,8 +43,10 @@ class PeatNotifications {
         macOS: darwin,
       ),
     );
-    final android13 = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
+    final android13 = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (android13 != null) {
       await android13.createNotificationChannel(_channel);
       await android13.requestNotificationsPermission();
@@ -61,8 +63,9 @@ class PeatNotifications {
     String? peerId,
   }) async {
     if (!_ready) return;
-    final who =
-        (peerId != null && peerId.length >= 6) ? peerId.substring(0, 6) : 'a peer';
+    final who = (peerId != null && peerId.length >= 6)
+        ? peerId.substring(0, 6)
+        : 'a peer';
     final title = 'Update in $collection';
     final body = (preview == null || preview.isEmpty)
         ? 'Synced from $who'

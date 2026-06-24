@@ -6,8 +6,10 @@
 enum CasrepType { initial, update, cancel }
 
 String casrepTypeToken(CasrepType t) => t.name;
-CasrepType casrepTypeFromToken(String s) => CasrepType.values
-    .firstWhere((t) => t.name == s, orElse: () => CasrepType.initial);
+CasrepType casrepTypeFromToken(String s) => CasrepType.values.firstWhere(
+  (t) => t.name == s,
+  orElse: () => CasrepType.initial,
+);
 
 enum OpImpact { c1, c2, c3, c4 }
 
@@ -19,8 +21,8 @@ const opImpactLabel = {
 };
 
 String opImpactToken(OpImpact o) => o.name;
-OpImpact opImpactFromToken(String s) => OpImpact.values
-    .firstWhere((o) => o.name == s, orElse: () => OpImpact.c2);
+OpImpact opImpactFromToken(String s) =>
+    OpImpact.values.firstWhere((o) => o.name == s, orElse: () => OpImpact.c2);
 
 // --- CASREP category, derived from the originating job's priority -----------
 //
@@ -80,42 +82,52 @@ class Casrep {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'jobId': jobId,
-        'number': number,
-        'type': casrepTypeToken(type),
-        'hull': hull,
-        'wuc': wuc,
-        'opImpact': opImpactToken(opImpact),
-        'etr': etr,
-        'narrative': narrative,
-        'partsNeeded': partsNeeded,
-        'originator': originator,
-        'createdAtMs': createdAtMs,
-        'updatedAtMs': updatedAtMs,
-      };
+    'id': id,
+    'jobId': jobId,
+    'number': number,
+    'type': casrepTypeToken(type),
+    'hull': hull,
+    'wuc': wuc,
+    'opImpact': opImpactToken(opImpact),
+    'etr': etr,
+    'narrative': narrative,
+    'partsNeeded': partsNeeded,
+    'originator': originator,
+    'createdAtMs': createdAtMs,
+    'updatedAtMs': updatedAtMs,
+  };
 
   factory Casrep.fromJson(Map<String, dynamic> j) => Casrep(
-        id: j['id'] as String,
-        jobId: (j['jobId'] ?? '') as String,
-        number: (j['number'] ?? '000') as String,
-        type: casrepTypeFromToken((j['type'] ?? 'initial') as String),
-        hull: (j['hull'] ?? '') as String,
-        wuc: (j['wuc'] ?? '') as String,
-        opImpact: opImpactFromToken((j['opImpact'] ?? 'c2') as String),
-        etr: (j['etr'] ?? '') as String,
-        narrative: (j['narrative'] ?? '') as String,
-        partsNeeded: (j['partsNeeded'] ?? '') as String,
-        originator: (j['originator'] ?? '') as String,
-        createdAtMs: (j['createdAtMs'] ?? 0) as int,
-        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    jobId: (j['jobId'] ?? '') as String,
+    number: (j['number'] ?? '000') as String,
+    type: casrepTypeFromToken((j['type'] ?? 'initial') as String),
+    hull: (j['hull'] ?? '') as String,
+    wuc: (j['wuc'] ?? '') as String,
+    opImpact: opImpactFromToken((j['opImpact'] ?? 'c2') as String),
+    etr: (j['etr'] ?? '') as String,
+    narrative: (j['narrative'] ?? '') as String,
+    partsNeeded: (j['partsNeeded'] ?? '') as String,
+    originator: (j['originator'] ?? '') as String,
+    createdAtMs: (j['createdAtMs'] ?? 0) as int,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+  );
 
   String toMessageText() {
     final dt = DateTime.fromMillisecondsSinceEpoch(createdAtMs).toUtc();
     final months = [
-      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
     ];
     final dtg =
         '${dt.day.toString().padLeft(2, '0')}${dt.hour.toString().padLeft(2, '0')}'

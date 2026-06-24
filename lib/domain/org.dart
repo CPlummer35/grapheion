@@ -28,13 +28,16 @@ class Division {
   String name;
   String departmentId;
   Division({required this.id, required this.name, required this.departmentId});
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'name': name, 'departmentId': departmentId};
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'departmentId': departmentId,
+  };
   factory Division.fromJson(Map<String, dynamic> j) => Division(
-        id: j['id'] as String,
-        name: (j['name'] ?? '') as String,
-        departmentId: (j['departmentId'] ?? '') as String,
-      );
+    id: j['id'] as String,
+    name: (j['name'] ?? '') as String,
+    departmentId: (j['departmentId'] ?? '') as String,
+  );
 }
 
 class WorkCenter {
@@ -42,13 +45,16 @@ class WorkCenter {
   String name;
   String divisionId;
   WorkCenter({required this.id, required this.name, required this.divisionId});
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'name': name, 'divisionId': divisionId};
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'divisionId': divisionId,
+  };
   factory WorkCenter.fromJson(Map<String, dynamic> j) => WorkCenter(
-        id: j['id'] as String,
-        name: (j['name'] ?? '') as String,
-        divisionId: (j['divisionId'] ?? '') as String,
-      );
+    id: j['id'] as String,
+    name: (j['name'] ?? '') as String,
+    divisionId: (j['divisionId'] ?? '') as String,
+  );
 }
 
 /// In-memory view of the synced org chart, assembled from the per-entity
@@ -63,9 +69,9 @@ class OrgChart {
     Map<String, Department>? departments,
     Map<String, Division>? divisions,
     Map<String, WorkCenter>? workcenters,
-  })  : departments = departments ?? {},
-        divisions = divisions ?? {},
-        workcenters = workcenters ?? {};
+  }) : departments = departments ?? {},
+       divisions = divisions ?? {},
+       workcenters = workcenters ?? {};
 
   Division? divisionOf(String workcenterId) {
     final wc = workcenters[workcenterId];
@@ -104,7 +110,11 @@ OrgChart seedOrgChart() {
     divisions[id] = Division(id: id, name: name, departmentId: deptId);
     // One work center per division as the default assignment target (the
     // watchbill + PQS hang off work centers).
-    workcenters['$id-WC'] = WorkCenter(id: '$id-WC', name: name, divisionId: id);
+    workcenters['$id-WC'] = WorkCenter(
+      id: '$id-WC',
+      name: name,
+      divisionId: id,
+    );
   }
 
   // CO -> XO -> Department Head -> DIVO.
@@ -161,7 +171,8 @@ class Account {
   String workcenterId;
   String pinSalt;
   String pinHash; // sha256("$salt:$pin") — light auth, not a strong KDF
-  String boundNodeId; // device this account is locked to ('' = any); Kratos uses it
+  String
+  boundNodeId; // device this account is locked to ('' = any); Kratos uses it
   String dutySection; // in-port duty section, e.g. "1".."5" ('' = unassigned)
   String billet; // WQSB billet / assigned position (free text, '' = none)
   final int createdAtMs;
@@ -192,34 +203,36 @@ class Account {
       role == Role.divo || role == Role.threeMC || role == Role.kratos;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'rate': rate,
-        'role': roleToken, // preserve the original token verbatim
-        'workcenterId': workcenterId,
-        'pinSalt': pinSalt,
-        'pinHash': pinHash,
-        'boundNodeId': boundNodeId,
-        'dutySection': dutySection,
-        'billet': billet,
-        'createdAtMs': createdAtMs,
-      };
+    'id': id,
+    'name': name,
+    'rate': rate,
+    'role': roleToken, // preserve the original token verbatim
+    'workcenterId': workcenterId,
+    'pinSalt': pinSalt,
+    'pinHash': pinHash,
+    'boundNodeId': boundNodeId,
+    'dutySection': dutySection,
+    'billet': billet,
+    'createdAtMs': createdAtMs,
+  };
 
   factory Account.fromJson(Map<String, dynamic> j) {
     final raw = (j['role'] ?? 'technician') as String;
     return Account(
-      id: j['id'] as String,
-      name: (j['name'] ?? '') as String,
-      rate: (j['rate'] ?? '') as String,
-      role: roleFromToken(raw),
-      workcenterId: (j['workcenterId'] ?? '') as String,
-      pinSalt: (j['pinSalt'] ?? '') as String,
-      pinHash: (j['pinHash'] ?? '') as String,
-      boundNodeId: (j['boundNodeId'] ?? '') as String,
-      dutySection: (j['dutySection'] ?? '') as String,
-      billet: (j['billet'] ?? '') as String,
-      createdAtMs: (j['createdAtMs'] ?? 0) as int,
-    )..roleToken = raw; // preserve the exact token, even if unknown to this build
+        id: j['id'] as String,
+        name: (j['name'] ?? '') as String,
+        rate: (j['rate'] ?? '') as String,
+        role: roleFromToken(raw),
+        workcenterId: (j['workcenterId'] ?? '') as String,
+        pinSalt: (j['pinSalt'] ?? '') as String,
+        pinHash: (j['pinHash'] ?? '') as String,
+        boundNodeId: (j['boundNodeId'] ?? '') as String,
+        dutySection: (j['dutySection'] ?? '') as String,
+        billet: (j['billet'] ?? '') as String,
+        createdAtMs: (j['createdAtMs'] ?? 0) as int,
+      )
+      ..roleToken =
+          raw; // preserve the exact token, even if unknown to this build
   }
 }
 

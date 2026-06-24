@@ -11,16 +11,19 @@ class FeedbackMessage {
   final String text;
   final int atMs;
 
-  FeedbackMessage(
-      {required this.fromOwner, required this.text, required this.atMs});
+  FeedbackMessage({
+    required this.fromOwner,
+    required this.text,
+    required this.atMs,
+  });
 
   Map<String, dynamic> toJson() => {'o': fromOwner, 't': text, 'at': atMs};
 
   factory FeedbackMessage.fromJson(Map<String, dynamic> j) => FeedbackMessage(
-        fromOwner: (j['o'] ?? false) as bool,
-        text: (j['t'] ?? '') as String,
-        atMs: (j['at'] ?? 0) as int,
-      );
+    fromOwner: (j['o'] ?? false) as bool,
+    text: (j['t'] ?? '') as String,
+    atMs: (j['at'] ?? 0) as int,
+  );
 }
 
 class FeedbackNote {
@@ -52,28 +55,28 @@ class FeedbackNote {
   int get lastActivityMs => lastMessage?.atMs ?? createdAtMs;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'fromId': fromId,
-        'fromRate': fromRate,
-        'fromRole': fromRole.token,
-        'context': context,
-        'messages': messages.map((m) => m.toJson()).toList(),
-        'readByOwner': readByOwner,
-        'readBySubmitter': readBySubmitter,
-        'createdAtMs': createdAtMs,
-      };
+    'id': id,
+    'fromId': fromId,
+    'fromRate': fromRate,
+    'fromRole': fromRole.token,
+    'context': context,
+    'messages': messages.map((m) => m.toJson()).toList(),
+    'readByOwner': readByOwner,
+    'readBySubmitter': readBySubmitter,
+    'createdAtMs': createdAtMs,
+  };
 
   factory FeedbackNote.fromJson(Map<String, dynamic> j) => FeedbackNote(
-        id: j['id'] as String,
-        fromId: (j['fromId'] ?? '') as String,
-        fromRate: (j['fromRate'] ?? '') as String,
-        fromRole: roleFromToken((j['fromRole'] ?? 'technician') as String),
-        context: (j['context'] ?? '') as String,
-        messages: ((j['messages'] as List?) ?? [])
-            .map((e) => FeedbackMessage.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        readByOwner: (j['readByOwner'] ?? false) as bool,
-        readBySubmitter: (j['readBySubmitter'] ?? true) as bool,
-        createdAtMs: (j['createdAtMs'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    fromId: (j['fromId'] ?? '') as String,
+    fromRate: (j['fromRate'] ?? '') as String,
+    fromRole: roleFromToken((j['fromRole'] ?? 'technician') as String),
+    context: (j['context'] ?? '') as String,
+    messages: ((j['messages'] as List?) ?? [])
+        .map((e) => FeedbackMessage.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    readByOwner: (j['readByOwner'] ?? false) as bool,
+    readBySubmitter: (j['readBySubmitter'] ?? true) as bool,
+    createdAtMs: (j['createdAtMs'] ?? 0) as int,
+  );
 }

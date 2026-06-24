@@ -78,11 +78,7 @@ Role roleFromToken(String t) =>
 /// (WCS → LPO → DIVO). The same three rungs are reused for the close-out chain.
 /// The Port Engineer is NOT on this ladder — the job reaches the PE only when
 /// the DIVO raises a Technical Assistance (TA) request for off-ship help.
-const List<Role> kApprovalChain = [
-  Role.wcs,
-  Role.lpo,
-  Role.divo,
-];
+const List<Role> kApprovalChain = [Role.wcs, Role.lpo, Role.divo];
 
 /// The role one rung up from [current], or null if [current] is the last rung
 /// (the port engineer — approving there accepts the job off-ship).

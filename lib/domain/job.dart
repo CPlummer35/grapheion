@@ -14,8 +14,10 @@ import 'chain.dart';
 enum JobPhase { approval, ta, execution, closeout, closed }
 
 String jobPhaseToken(JobPhase p) => p.name;
-JobPhase jobPhaseFromToken(String t) => JobPhase.values
-    .firstWhere((p) => p.name == t, orElse: () => JobPhase.approval);
+JobPhase jobPhaseFromToken(String t) => JobPhase.values.firstWhere(
+  (p) => p.name == t,
+  orElse: () => JobPhase.approval,
+);
 
 /// A corrective-maintenance work item (the deferred 2-Kilo / CSMP record).
 class Job {
@@ -170,42 +172,42 @@ class Job {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'ein': ein,
-        'symptom': symptom,
-        'priority': priority,
-        'originator': originator,
-        'workcenter': workcenter,
-        'phase': jobPhaseToken(phase),
-        'approver': approver.token,
-        'returned': returned,
-        'inWork': inWork,
-        'taRequested': taRequested,
-        'scheduledForMs': scheduledForMs,
-        'assignedTo': assignedTo,
-        'createdAtMs': createdAtMs,
-        'updatedAtMs': updatedAtMs,
-      };
+    'id': id,
+    'title': title,
+    'ein': ein,
+    'symptom': symptom,
+    'priority': priority,
+    'originator': originator,
+    'workcenter': workcenter,
+    'phase': jobPhaseToken(phase),
+    'approver': approver.token,
+    'returned': returned,
+    'inWork': inWork,
+    'taRequested': taRequested,
+    'scheduledForMs': scheduledForMs,
+    'assignedTo': assignedTo,
+    'createdAtMs': createdAtMs,
+    'updatedAtMs': updatedAtMs,
+  };
 
   factory Job.fromJson(Map<String, dynamic> j) => Job(
-        id: j['id'] as String,
-        title: (j['title'] ?? '') as String,
-        ein: (j['ein'] ?? '') as String,
-        symptom: (j['symptom'] ?? '') as String,
-        priority: (j['priority'] ?? 3) as int,
-        originator: (j['originator'] ?? '') as String,
-        workcenter: (j['workcenter'] ?? '') as String,
-        phase: jobPhaseFromToken((j['phase'] ?? 'approval') as String),
-        approver: roleFromToken((j['approver'] ?? 'wcs') as String),
-        returned: (j['returned'] ?? false) as bool,
-        inWork: (j['inWork'] ?? false) as bool,
-        taRequested: (j['taRequested'] ?? false) as bool,
-        scheduledForMs: j['scheduledForMs'] as int?,
-        assignedTo: (j['assignedTo'] ?? '') as String,
-        createdAtMs: (j['createdAtMs'] ?? 0) as int,
-        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    title: (j['title'] ?? '') as String,
+    ein: (j['ein'] ?? '') as String,
+    symptom: (j['symptom'] ?? '') as String,
+    priority: (j['priority'] ?? 3) as int,
+    originator: (j['originator'] ?? '') as String,
+    workcenter: (j['workcenter'] ?? '') as String,
+    phase: jobPhaseFromToken((j['phase'] ?? 'approval') as String),
+    approver: roleFromToken((j['approver'] ?? 'wcs') as String),
+    returned: (j['returned'] ?? false) as bool,
+    inWork: (j['inWork'] ?? false) as bool,
+    taRequested: (j['taRequested'] ?? false) as bool,
+    scheduledForMs: j['scheduledForMs'] as int?,
+    assignedTo: (j['assignedTo'] ?? '') as String,
+    createdAtMs: (j['createdAtMs'] ?? 0) as int,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+  );
 }
 
 /// One entry in a job's append-only audit log.
@@ -231,22 +233,22 @@ class JobEvent {
   String get docId => '$jobId-${seq.toString().padLeft(4, '0')}';
 
   Map<String, dynamic> toJson() => {
-        'jobId': jobId,
-        'seq': seq,
-        'actor': actor,
-        'role': role.token,
-        'action': action,
-        'comment': comment,
-        'tsMs': tsMs,
-      };
+    'jobId': jobId,
+    'seq': seq,
+    'actor': actor,
+    'role': role.token,
+    'action': action,
+    'comment': comment,
+    'tsMs': tsMs,
+  };
 
   factory JobEvent.fromJson(Map<String, dynamic> j) => JobEvent(
-        jobId: j['jobId'] as String,
-        seq: (j['seq'] ?? 0) as int,
-        actor: (j['actor'] ?? '') as String,
-        role: roleFromToken((j['role'] ?? 'technician') as String),
-        action: (j['action'] ?? '') as String,
-        comment: (j['comment'] ?? '') as String,
-        tsMs: (j['tsMs'] ?? 0) as int,
-      );
+    jobId: j['jobId'] as String,
+    seq: (j['seq'] ?? 0) as int,
+    actor: (j['actor'] ?? '') as String,
+    role: roleFromToken((j['role'] ?? 'technician') as String),
+    action: (j['action'] ?? '') as String,
+    comment: (j['comment'] ?? '') as String,
+    tsMs: (j['tsMs'] ?? 0) as int,
+  );
 }

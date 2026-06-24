@@ -29,8 +29,10 @@ extension QualTypeInfo on QualType {
 }
 
 String qualTypeToken(QualType t) => t.name;
-QualType qualTypeFromToken(String s) => QualType.values
-    .firstWhere((t) => t.name == s, orElse: () => QualType.watchStation);
+QualType qualTypeFromToken(String s) => QualType.values.firstWhere(
+  (t) => t.name == s,
+  orElse: () => QualType.watchStation,
+);
 
 /// A person's progress stage on a qualification.
 enum QualStage { notStarted, inProgress, boardPending, qualified }
@@ -51,9 +53,10 @@ extension QualStageInfo on QualStage {
 }
 
 String qualStageToken(QualStage q) => q.name;
-QualStage qualStageFromToken(String s) => QualStage.values
-    .firstWhere((q) => q.name == s, orElse: () => QualStage.notStarted);
-
+QualStage qualStageFromToken(String s) => QualStage.values.firstWhere(
+  (q) => q.name == s,
+  orElse: () => QualStage.notStarted,
+);
 
 /// A qualification definition — a node in the qual tree.
 class Qualification {
@@ -80,27 +83,26 @@ class Qualification {
   bool get isWatchStation => type == QualType.watchStation;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'abbr': abbr,
-        'type': qualTypeToken(type),
-        'prereqIds': prereqIds,
-        'hoursRequired': hoursRequired,
-        'inPort': inPort,
-        'order': order,
-      };
+    'id': id,
+    'name': name,
+    'abbr': abbr,
+    'type': qualTypeToken(type),
+    'prereqIds': prereqIds,
+    'hoursRequired': hoursRequired,
+    'inPort': inPort,
+    'order': order,
+  };
 
   factory Qualification.fromJson(Map<String, dynamic> j) => Qualification(
-        id: j['id'] as String,
-        name: (j['name'] ?? '') as String,
-        abbr: (j['abbr'] ?? '') as String,
-        type: qualTypeFromToken((j['type'] ?? 'watchStation') as String),
-        prereqIds:
-            (j['prereqIds'] as List?)?.map((e) => e as String).toList(),
-        hoursRequired: j['hoursRequired'] as int?,
-        inPort: (j['inPort'] ?? true) as bool,
-        order: (j['order'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    name: (j['name'] ?? '') as String,
+    abbr: (j['abbr'] ?? '') as String,
+    type: qualTypeFromToken((j['type'] ?? 'watchStation') as String),
+    prereqIds: (j['prereqIds'] as List?)?.map((e) => e as String).toList(),
+    hoursRequired: j['hoursRequired'] as int?,
+    inPort: (j['inPort'] ?? true) as bool,
+    order: (j['order'] ?? 0) as int,
+  );
 }
 
 /// A person's progress on one qualification.
@@ -130,26 +132,26 @@ class PersonQual {
   bool get isQualified => stage == QualStage.qualified;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'personId': personId,
-        'qualId': qualId,
-        'stage': qualStageToken(stage),
-        'percent': percent,
-        'hoursLogged': hoursLogged,
-        'qualifier': qualifier,
-        'updatedAtMs': updatedAtMs,
-      };
+    'id': id,
+    'personId': personId,
+    'qualId': qualId,
+    'stage': qualStageToken(stage),
+    'percent': percent,
+    'hoursLogged': hoursLogged,
+    'qualifier': qualifier,
+    'updatedAtMs': updatedAtMs,
+  };
 
   factory PersonQual.fromJson(Map<String, dynamic> j) => PersonQual(
-        id: j['id'] as String,
-        personId: (j['personId'] ?? '') as String,
-        qualId: (j['qualId'] ?? '') as String,
-        stage: qualStageFromToken((j['stage'] ?? 'notStarted') as String),
-        percent: (j['percent'] ?? 0) as int,
-        hoursLogged: (j['hoursLogged'] ?? 0) as int,
-        qualifier: (j['qualifier'] ?? false) as bool,
-        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    personId: (j['personId'] ?? '') as String,
+    qualId: (j['qualId'] ?? '') as String,
+    stage: qualStageFromToken((j['stage'] ?? 'notStarted') as String),
+    percent: (j['percent'] ?? 0) as int,
+    hoursLogged: (j['hoursLogged'] ?? 0) as int,
+    qualifier: (j['qualifier'] ?? false) as bool,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+  );
 }
 
 // --- Qualification-tree logic (pure) --------------------------------------
@@ -188,21 +190,26 @@ class WatchShift {
   String start; // "0630"
   String end; // "1130"
 
-  WatchShift(
-      {required this.id,
-      required this.label,
-      required this.start,
-      required this.end});
+  WatchShift({
+    required this.id,
+    required this.label,
+    required this.start,
+    required this.end,
+  });
 
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'label': label, 'start': start, 'end': end};
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'label': label,
+    'start': start,
+    'end': end,
+  };
 
   factory WatchShift.fromJson(Map<String, dynamic> j) => WatchShift(
-        id: j['id'] as String,
-        label: (j['label'] ?? '') as String,
-        start: (j['start'] ?? '') as String,
-        end: (j['end'] ?? '') as String,
-      );
+    id: j['id'] as String,
+    label: (j['label'] ?? '') as String,
+    start: (j['start'] ?? '') as String,
+    end: (j['end'] ?? '') as String,
+  );
 }
 
 /// A required role in an evolution — a watch station that must be manned.
@@ -222,20 +229,20 @@ class EvolutionRole {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'stationId': stationId,
-        'name': name,
-        'rotating': rotating,
-        'order': order,
-      };
+    'id': id,
+    'stationId': stationId,
+    'name': name,
+    'rotating': rotating,
+    'order': order,
+  };
 
   factory EvolutionRole.fromJson(Map<String, dynamic> j) => EvolutionRole(
-        id: j['id'] as String,
-        stationId: (j['stationId'] ?? '') as String,
-        name: (j['name'] ?? '') as String,
-        rotating: (j['rotating'] ?? false) as bool,
-        order: (j['order'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    stationId: (j['stationId'] ?? '') as String,
+    name: (j['name'] ?? '') as String,
+    rotating: (j['rotating'] ?? false) as bool,
+    order: (j['order'] ?? 0) as int,
+  );
 }
 
 /// A named event with the roles it requires + (for rotating roles) its shifts.
@@ -254,30 +261,30 @@ class Evolution {
     List<WatchShift>? shifts,
     List<EvolutionRole>? roles,
     this.order = 0,
-  })  : shifts = shifts ?? [],
-        roles = roles ?? [];
+  }) : shifts = shifts ?? [],
+       roles = roles ?? [];
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'inPort': inPort,
-        'shifts': shifts.map((s) => s.toJson()).toList(),
-        'roles': roles.map((r) => r.toJson()).toList(),
-        'order': order,
-      };
+    'id': id,
+    'name': name,
+    'inPort': inPort,
+    'shifts': shifts.map((s) => s.toJson()).toList(),
+    'roles': roles.map((r) => r.toJson()).toList(),
+    'order': order,
+  };
 
   factory Evolution.fromJson(Map<String, dynamic> j) => Evolution(
-        id: j['id'] as String,
-        name: (j['name'] ?? '') as String,
-        inPort: (j['inPort'] ?? true) as bool,
-        shifts: ((j['shifts'] as List?) ?? [])
-            .map((e) => WatchShift.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        roles: ((j['roles'] as List?) ?? [])
-            .map((e) => EvolutionRole.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        order: (j['order'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    name: (j['name'] ?? '') as String,
+    inPort: (j['inPort'] ?? true) as bool,
+    shifts: ((j['shifts'] as List?) ?? [])
+        .map((e) => WatchShift.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    roles: ((j['roles'] as List?) ?? [])
+        .map((e) => EvolutionRole.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    order: (j['order'] ?? 0) as int,
+  );
 }
 
 /// One filled cell: a person posted to a role (+ shift, if rotating) on a day's
@@ -302,28 +309,31 @@ class BillEntry {
   });
 
   static String makeId(
-          int dayMs, String evolutionId, String roleId, String shiftId) =>
-      '${startOfDay(dayMs)}|$evolutionId|$roleId|$shiftId';
+    int dayMs,
+    String evolutionId,
+    String roleId,
+    String shiftId,
+  ) => '${startOfDay(dayMs)}|$evolutionId|$roleId|$shiftId';
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'dayMs': dayMs,
-        'evolutionId': evolutionId,
-        'roleId': roleId,
-        'shiftId': shiftId,
-        'personId': personId,
-        'updatedAtMs': updatedAtMs,
-      };
+    'id': id,
+    'dayMs': dayMs,
+    'evolutionId': evolutionId,
+    'roleId': roleId,
+    'shiftId': shiftId,
+    'personId': personId,
+    'updatedAtMs': updatedAtMs,
+  };
 
   factory BillEntry.fromJson(Map<String, dynamic> j) => BillEntry(
-        id: j['id'] as String,
-        dayMs: (j['dayMs'] ?? 0) as int,
-        evolutionId: (j['evolutionId'] ?? '') as String,
-        roleId: (j['roleId'] ?? '') as String,
-        shiftId: (j['shiftId'] ?? '') as String,
-        personId: (j['personId'] ?? '') as String,
-        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
-      );
+    id: j['id'] as String,
+    dayMs: (j['dayMs'] ?? 0) as int,
+    evolutionId: (j['evolutionId'] ?? '') as String,
+    roleId: (j['roleId'] ?? '') as String,
+    shiftId: (j['shiftId'] ?? '') as String,
+    personId: (j['personId'] ?? '') as String,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+  );
 }
 
 /// One fillable slot on a bill: a (role, shift) pair + the station it needs.
@@ -333,11 +343,12 @@ class BillSlot {
   final String stationId;
   final bool standing;
 
-  BillSlot(
-      {required this.roleId,
-      required this.shiftId,
-      required this.stationId,
-      required this.standing});
+  BillSlot({
+    required this.roleId,
+    required this.shiftId,
+    required this.stationId,
+    required this.standing,
+  });
 
   String get key => '$roleId|$shiftId';
 }
@@ -345,21 +356,23 @@ class BillSlot {
 /// Expand an evolution into its fillable slots — standing roles get one slot,
 /// rotating roles one per shift.
 List<BillSlot> evolutionSlots(Evolution e) => [
-      for (final r in e.roles)
-        if (r.rotating)
-          for (final s in e.shifts)
-            BillSlot(
-                roleId: r.id,
-                shiftId: s.id,
-                stationId: r.stationId,
-                standing: false)
-        else
-          BillSlot(
-              roleId: r.id,
-              shiftId: '',
-              stationId: r.stationId,
-              standing: true),
-    ];
+  for (final r in e.roles)
+    if (r.rotating)
+      for (final s in e.shifts)
+        BillSlot(
+          roleId: r.id,
+          shiftId: s.id,
+          stationId: r.stationId,
+          standing: false,
+        )
+    else
+      BillSlot(
+        roleId: r.id,
+        shiftId: '',
+        stationId: r.stationId,
+        standing: true,
+      ),
+];
 
 /// Auto-fill a bill: assign qualified people to [slots], never double-booking a
 /// person into overlapping watches (a standing watch overlaps everything; two
@@ -387,10 +400,9 @@ Map<String, String> autoFillBill({
     ...slots.where((s) => !s.standing),
   ];
   for (final s in ordered) {
-    final cands = people
-        .where((p) => isQualified(p, s.stationId) && free(p, s))
-        .toList()
-      ..sort((a, b) => load[a]!.compareTo(load[b]!));
+    final cands =
+        people.where((p) => isQualified(p, s.stationId) && free(p, s)).toList()
+          ..sort((a, b) => load[a]!.compareTo(load[b]!));
     if (cands.isEmpty) continue;
     final pick = cands.first;
     result[s.key] = pick;
@@ -470,8 +482,9 @@ Map<int, List<String>> dutySectionGaps({
 }) {
   final gaps = <int, List<String>>{};
   for (var sec = 1; sec <= sections; sec++) {
-    final mem =
-        assignment.entries.where((e) => e.value == sec).map((e) => e.key);
+    final mem = assignment.entries
+        .where((e) => e.value == sec)
+        .map((e) => e.key);
     final missing = requiredStations
         .where((st) => !mem.any((p) => isQualified(p, st)))
         .toList();

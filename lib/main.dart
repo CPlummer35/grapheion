@@ -27,6 +27,7 @@ import 'package:peat_flutter/peat_flutter.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'domain/bulletin.dart';
 import 'domain/casrep.dart';
 import 'domain/chain.dart';
 import 'domain/feedback.dart';
@@ -273,6 +274,7 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _adminSearchCtrl =
       TextEditingController(); // admin roster search
   String _dsSection = '1'; // duty-section tab: section a manager is viewing
+  final TextEditingController _bulletinCtrl = TextEditingController();
   final ValueNotifier<int> _feedbackTick = ValueNotifier(
     0,
   ); // refreshes open feedback sheet
@@ -584,6 +586,9 @@ class _HomePageState extends State<HomePage> {
           }
           for (final a in _store.bill.values) {
             _bleBroadcast(kBill, a.id, jsonEncode(a.toJson()));
+          }
+          for (final b in _store.bulletin.values) {
+            _bleBroadcast(kBulletin, b.id, jsonEncode(b.toJson()));
           }
           for (final f in _store.feedback.values) {
             _bleBroadcast(kFeedback, f.id, jsonEncode(f.toJson()));
@@ -1039,6 +1044,7 @@ class _HomePageState extends State<HomePage> {
       kQuals,
       kEvolutions,
       kBill,
+      kBulletin,
       kFeedback,
     ]) {
       for (final id in node.listDocuments(coll)) {
@@ -1792,6 +1798,29 @@ class _HomePageState extends State<HomePage> {
     for (final s in evolutionSlots(ev)) {
       _setBillEntry(day, ev.id, s.roleId, s.shiftId, null);
     }
+  }
+
+  void _postBulletin(String section, String text) {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final me = _account;
+    final post = BulletinPost(
+      id: 'bp-$now-${_randHex(3)}',
+      section: section,
+      authorId: me?.id ?? '',
+      authorName: me == null
+          ? 'Unknown'
+          : (me.rate.isEmpty ? me.name : '${me.rate} ${me.name}'),
+      text: t,
+      atMs: now,
+    );
+    final json = jsonEncode(post.toJson());
+    _store.bulletin[post.id] = post;
+    _node!.putRaw(kBulletin, post.id, json);
+    _bleBroadcast(kBulletin, post.id, json);
+    _bulletinCtrl.clear();
+    if (mounted) setState(() {});
   }
 
   // --- Admin (personnel hub) — DIVO and higher ------------------------------
@@ -3400,7 +3429,7 @@ class _HomePageState extends State<HomePage> {
     final ev = _inPortEvolution();
 
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Column(
         children: [
           if (manager) _dsManagerBar(),
@@ -3413,6 +3442,7 @@ class _HomePageState extends State<HomePage> {
             tabs: [
               Tab(text: 'ROSTER'),
               Tab(text: 'WATCHBILL'),
+              Tab(text: 'BULLETIN'),
             ],
           ),
           Expanded(
@@ -3430,6 +3460,7 @@ class _HomePageState extends State<HomePage> {
                         children: [for (final a in members) _personnelTile(a)],
                       ),
                 _dsWatchbill(ev, section, memberIds),
+                _dsBulletin(section),
               ],
             ),
           ),
@@ -3546,6 +3577,104 @@ class _HomePageState extends State<HomePage> {
         ),
       ],
     );
+  }
+
+  /// The section bulletin — a post board scoped to the section.
+  Widget _dsBulletin(String section) {
+    final posts = _store.bulletinForSection(section);
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Expanded(
+          child: posts.isEmpty
+              ? const Center(
+                  child: Text(
+                    'No posts yet — say something.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: posts.length,
+                  itemBuilder: (_, i) {
+                    final p = posts[i];
+                    final mine = p.authorId == _account?.id;
+                    return ListTile(
+                      dense: true,
+                      title: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              p.authorName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _shortDate(p.atMs),
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: Text(p.text),
+                      trailing: (mine || _canManageSections)
+                          ? IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                              onPressed: () => _deleteBulletin(p.id),
+                            )
+                          : null,
+                    );
+                  },
+                ),
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _bulletinCtrl,
+                  minLines: 1,
+                  maxLines: 3,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'Post to Section $section…',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.send, color: scheme.primary),
+                onPressed: () => _postBulletin(section, _bulletinCtrl.text),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _deleteBulletin(String id) {
+    final p = _store.bulletin[id];
+    if (p == null) return;
+    _store.bulletin.remove(id);
+    final tomb = jsonEncode({
+      ...p.toJson(),
+      'text': '',
+    }); // empty text = removed
+    _node!.putRaw(kBulletin, id, tomb);
+    _bleBroadcast(kBulletin, id, tomb);
+    if (mounted) setState(() {});
   }
 
   Widget _dutySectionHeader(String title, int count, List<String>? gaps) {
