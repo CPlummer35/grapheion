@@ -272,6 +272,7 @@ class _HomePageState extends State<HomePage> {
   _AdminSort _adminSort = _AdminSort.name; // admin roster ordering
   final TextEditingController _adminSearchCtrl =
       TextEditingController(); // admin roster search
+  String _dsSection = '1'; // duty-section tab: section a manager is viewing
   final ValueNotifier<int> _feedbackTick = ValueNotifier(
     0,
   ); // refreshes open feedback sheet
@@ -1751,6 +1752,48 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// The in-port evolution whose required positions are the constraint set
+  /// (first in-port evolution), or null if none defined yet.
+  Evolution? _inPortEvolution() {
+    final evos = _store.evolutions.values.where((e) => e.inPort).toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    return evos.isEmpty ? null : evos.first;
+  }
+
+  /// A stable synthetic "duty day" per section, so each section keeps its own
+  /// bill (distinct from the calendar-day bills on the Watchbills tab).
+  int _sectionDayMs(String section) => DateTime(
+    2000,
+    1,
+    1 + (int.tryParse(section) ?? 0),
+  ).millisecondsSinceEpoch;
+
+  List<String> _sectionMemberIds(String section) => _store.accounts.values
+      .where((a) => a.dutySection == section && a.role != Role.kratos)
+      .map((a) => a.id)
+      .toList();
+
+  /// Auto-fill [ev]'s bill for a section from ONLY that section's members.
+  void _autoFillSectionBill(Evolution ev, String section) {
+    final day = _sectionDayMs(section);
+    final slots = evolutionSlots(ev);
+    final fill = autoFillBill(
+      slots: slots,
+      people: _sectionMemberIds(section),
+      isQualified: (p, st) => _store.isQualified(p, st),
+    );
+    for (final s in slots) {
+      _setBillEntry(day, ev.id, s.roleId, s.shiftId, fill[s.key]);
+    }
+  }
+
+  void _clearSectionBill(Evolution ev, String section) {
+    final day = _sectionDayMs(section);
+    for (final s in evolutionSlots(ev)) {
+      _setBillEntry(day, ev.id, s.roleId, s.shiftId, null);
+    }
+  }
+
   // --- Admin (personnel hub) — DIVO and higher ------------------------------
 
   /// DIVO and up may open the personnel hub.
@@ -3120,7 +3163,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// A rotating role — a header + one row per section shift.
-  Widget _billRotatingGroup(int day, Evolution ev, EvolutionRole r) {
+  Widget _billRotatingGroup(
+    int day,
+    Evolution ev,
+    EvolutionRole r, {
+    Set<String>? scope,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3141,6 +3189,7 @@ class _HomePageState extends State<HomePage> {
             s.id,
             'Sec ${s.label}',
             '${s.start}-${s.end}',
+            scope: scope,
           ),
       ],
     );
@@ -3153,8 +3202,9 @@ class _HomePageState extends State<HomePage> {
     EvolutionRole r,
     String shiftId,
     String label,
-    String sub,
-  ) {
+    String sub, {
+    Set<String>? scope,
+  }) {
     final pid = _store.billAssignee(day, ev.id, r.id, shiftId);
     final unqual =
         pid != null && pid.isNotEmpty && !_store.isQualified(pid, r.stationId);
@@ -3190,7 +3240,7 @@ class _HomePageState extends State<HomePage> {
       ),
       trailing: _canManageWatch ? const Icon(Icons.edit, size: 18) : null,
       onTap: _canManageWatch
-          ? () => _openBillAssign(day, ev, r, shiftId, label)
+          ? () => _openBillAssign(day, ev, r, shiftId, label, scope: scope)
           : null,
     );
   }
@@ -3232,8 +3282,9 @@ class _HomePageState extends State<HomePage> {
     Evolution ev,
     EvolutionRole r,
     String shiftId,
-    String slot,
-  ) {
+    String slot, {
+    Set<String>? scope, // if set, only these people may be posted (a section)
+  }) {
     // The time of this slot (empty for a standing watch).
     var slotTime = '';
     for (final s in ev.shifts) {
@@ -3246,7 +3297,10 @@ class _HomePageState extends State<HomePage> {
     // standing watch, their total) — so the least-burdened sort to the top and
     // you stop stacking the same people on the mids.
     final load = <String, int>{};
-    final qualified = _store.qualifiedFor(r.stationId);
+    final qualified = _store
+        .qualifiedFor(r.stationId)
+        .where((p) => scope == null || scope.contains(p))
+        .toList();
     for (final pid in qualified) {
       final h = _personWatchHistory(pid);
       load[pid] = slotTime.isEmpty ? h.total : (h.byTime[slotTime] ?? 0);
@@ -3319,85 +3373,174 @@ class _HomePageState extends State<HomePage> {
   /// DH-and-below sees only their own section; ship-wide roles see all five and
   /// can auto-generate the rotation.
   Widget _dutySectionPage() {
-    final crew = _store.accounts.values
-        .where((a) => a.role != Role.kratos)
-        .toList();
-    final bySection = <String, List<Account>>{};
-    for (final a in crew) {
-      final s = a.dutySection.isEmpty ? '—' : a.dutySection;
-      (bySection[s] ??= []).add(a);
-    }
-    for (final list in bySection.values) {
-      list.sort((a, b) => a.name.compareTo(b.name));
-    }
-
-    if (!_canManageSections) {
-      // Scoped view: only my own section.
-      final mine = _account?.dutySection ?? '';
-      if (mine.isEmpty) {
-        return const Center(
-          child: Padding(
-            padding: EdgeInsets.all(32),
-            child: Text(
-              "You're not assigned to a duty section yet.",
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
-            ),
+    final manager = _canManageSections;
+    final mine = _account?.dutySection ?? '';
+    if (!manager && mine.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text(
+            "You're not assigned to a duty section yet.",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey),
           ),
-        );
-      }
-      final mates = bySection[mine] ?? [];
-      return Column(
+        ),
+      );
+    }
+    final section = manager ? _dsSection : mine;
+    final members =
+        _store.accounts.values
+            .where((a) => a.role != Role.kratos && a.dutySection == section)
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+    final memberIds = members.map((a) => a.id).toSet();
+    final secGaps = _inPortRequiredStations()
+        .where((st) => !members.any((a) => _store.isQualified(a.id, st)))
+        .toList();
+    final ev = _inPortEvolution();
+
+    return DefaultTabController(
+      length: 2,
+      child: Column(
         children: [
-          _dutySectionHeader('Section $mine', mates.length, null),
+          if (manager) _dsManagerBar(),
+          _dutySectionHeader(
+            manager ? 'Section $section' : 'Your Duty Section — $section',
+            members.length,
+            secGaps.isEmpty ? null : secGaps,
+          ),
+          const TabBar(
+            tabs: [
+              Tab(text: 'ROSTER'),
+              Tab(text: 'WATCHBILL'),
+            ],
+          ),
           Expanded(
-            child: ListView(
-              children: [for (final a in mates) _personnelTile(a)],
+            child: TabBarView(
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                members.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'No one in this section yet.',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      )
+                    : ListView(
+                        children: [for (final a in members) _personnelTile(a)],
+                      ),
+                _dsWatchbill(ev, section, memberIds),
+              ],
             ),
           ),
         ],
-      );
-    }
-
-    // Manager view: all five sections + auto-generate + coverage gaps.
-    final required = _inPortRequiredStations();
-    final assignment = {
-      for (final a in crew)
-        if (a.dutySection.isNotEmpty) a.id: int.tryParse(a.dutySection) ?? 0,
-    };
-    final gaps = dutySectionGaps(
-      assignment: assignment,
-      requiredStations: required,
-      isQualified: (p, st) => _store.isQualified(p, st),
+      ),
     );
-    final keys = ['1', '2', '3', '4', '5', if (bySection.containsKey('—')) '—'];
-    return Column(
+  }
+
+  Widget _dsManagerBar() => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+    child: Row(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-          child: Row(
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final s in ['1', '2', '3', '4', '5'])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text('Sec $s'),
+                      selected: _dsSection == s,
+                      onSelected: (_) => setState(() => _dsSection = s),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: 'Edit in-port positions (the constraints)',
+          icon: const Icon(Icons.tune),
+          onPressed: () => _openEvolutionEditor(_inPortEvolution()),
+        ),
+        IconButton(
+          tooltip: 'Auto-generate 5 sections',
+          icon: const Icon(Icons.auto_fix_high),
+          onPressed: _autoAssignDutySections,
+        ),
+      ],
+    ),
+  );
+
+  /// The section's in-port watchbill — the In-Port Duty evolution filled from
+  /// ONLY this section's members.
+  Widget _dsWatchbill(Evolution? ev, String section, Set<String> memberIds) {
+    if (ev == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              FilledButton.tonalIcon(
-                onPressed: _autoAssignDutySections,
-                icon: const Icon(Icons.auto_fix_high, size: 18),
-                label: const Text('Auto-generate 5 sections'),
+              const Text(
+                'No in-port watchbill defined yet.',
+                style: TextStyle(color: Colors.grey),
               ),
+              if (_canManageWatch) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () => _openEvolutionEditor(null),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Define in-port positions'),
+                ),
+              ],
             ],
           ),
         ),
+      );
+    }
+    final day = _sectionDayMs(section);
+    final roles = ev.roles.toList()..sort((a, b) => a.order.compareTo(b.order));
+    return Column(
+      children: [
+        if (_canManageWatch)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () => _autoFillSectionBill(ev, section),
+                  icon: const Icon(Icons.auto_fix_high, size: 18),
+                  label: const Text('Auto-fill from section'),
+                ),
+                TextButton.icon(
+                  onPressed: () => _clearSectionBill(ev, section),
+                  icon: const Icon(Icons.clear_all, size: 18),
+                  label: const Text('Clear'),
+                ),
+              ],
+            ),
+          ),
         const Divider(height: 1),
         Expanded(
           child: ListView(
             children: [
-              for (final k in keys)
-                if (bySection[k] != null) ...[
-                  _dutySectionHeader(
-                    k == '—' ? 'Unassigned' : 'Section $k',
-                    bySection[k]!.length,
-                    gaps[int.tryParse(k)],
+              for (final r in roles)
+                if (r.rotating)
+                  _billRotatingGroup(day, ev, r, scope: memberIds)
+                else
+                  _billSlotTile(
+                    day,
+                    ev,
+                    r,
+                    '',
+                    r.name,
+                    'whole day',
+                    scope: memberIds,
                   ),
-                  for (final a in bySection[k]!) _personnelTile(a),
-                ],
             ],
           ),
         ),
