@@ -403,3 +403,79 @@ Map<String, String> autoFillBill({
   }
   return result;
 }
+
+// --- Duty sections --------------------------------------------------------
+//
+// A duty section is one-fifth (1/N) of the whole crew that stands the 24-hour
+// in-port duty day. Auto-assignment partitions everyone into N balanced sections
+// such that each section can man the whole bill on its own — every required
+// station is covered by at least one qualified member of the section.
+
+/// Partition [people] into [sections] balanced duty sections (numbered 1..N)
+/// so each section covers every station in [requiredStations] where possible.
+/// Greedy: cover the scarcest stations first (spreading their few qualified
+/// people across sections), then fill the rest to even out section sizes.
+Map<String, int> assignDutySections({
+  required List<String> people,
+  required List<String> requiredStations,
+  required bool Function(String person, String station) isQualified,
+  int sections = 5,
+}) {
+  final assign = <String, int>{};
+  final members = {for (var s = 1; s <= sections; s++) s: <String>[]};
+
+  bool covers(int sec, String st) =>
+      members[sec]!.any((p) => isQualified(p, st));
+  void place(String p, int sec) {
+    assign[p] = sec;
+    members[sec]!.add(p);
+  }
+
+  int qualCount(String st) => people.where((p) => isQualified(p, st)).length;
+
+  // 1. Coverage pass — scarcest stations first, spread across sections.
+  final byScarcity = [...requiredStations]
+    ..sort((a, b) => qualCount(a).compareTo(qualCount(b)));
+  for (final st in byScarcity) {
+    for (var sec = 1; sec <= sections; sec++) {
+      if (covers(sec, st)) continue;
+      String? pick;
+      for (final p in people) {
+        if (!assign.containsKey(p) && isQualified(p, st)) {
+          pick = p;
+          break;
+        }
+      }
+      if (pick != null) place(pick, sec); // else: gap (too few qualified)
+    }
+  }
+
+  // 2. Balance pass — remaining people to the smallest section each time.
+  int smallest() => members.entries
+      .reduce((a, b) => a.value.length <= b.value.length ? a : b)
+      .key;
+  for (final p in people) {
+    if (!assign.containsKey(p)) place(p, smallest());
+  }
+  return assign;
+}
+
+/// Per-section coverage gaps: stations a section has NOBODY qualified for.
+/// Empty map = every section can man the whole bill.
+Map<int, List<String>> dutySectionGaps({
+  required Map<String, int> assignment,
+  required List<String> requiredStations,
+  required bool Function(String person, String station) isQualified,
+  int sections = 5,
+}) {
+  final gaps = <int, List<String>>{};
+  for (var sec = 1; sec <= sections; sec++) {
+    final mem =
+        assignment.entries.where((e) => e.value == sec).map((e) => e.key);
+    final missing = requiredStations
+        .where((st) => !mem.any((p) => isQualified(p, st)))
+        .toList();
+    if (missing.isNotEmpty) gaps[sec] = missing;
+  }
+  return gaps;
+}

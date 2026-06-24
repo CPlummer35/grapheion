@@ -1701,6 +1701,56 @@ class _HomePageState extends State<HomePage> {
   bool get _canManageWatch =>
       _role != null && _role != Role.technician && _role != Role.portEngineer;
 
+  /// Ship-wide roles run the duty-section rotation + see every section. Everyone
+  /// DH-and-below sees only their own duty section.
+  bool get _canManageSections => _role == Role.threeMC || _role == Role.kratos;
+
+  /// The in-port stations a duty section must be able to man — the distinct role
+  /// stations across the in-port evolutions (drives the auto-partition).
+  List<String> _inPortRequiredStations() {
+    final out = <String>{};
+    for (final ev in _store.evolutions.values.where((e) => e.inPort)) {
+      for (final r in ev.roles) {
+        out.add(r.stationId);
+      }
+    }
+    return out.toList();
+  }
+
+  /// Auto-partition the whole crew into 5 balanced duty sections, each able to
+  /// man the in-port bill, and write each person's section. Ship-wide only.
+  void _autoAssignDutySections() {
+    final crew = _store.accounts.values
+        .where((a) => a.role != Role.kratos)
+        .toList();
+    final required = _inPortRequiredStations();
+    final assignment = assignDutySections(
+      people: crew.map((a) => a.id).toList(),
+      requiredStations: required,
+      isQualified: (p, st) => _store.isQualified(p, st),
+      sections: 5,
+    );
+    assignment.forEach((pid, sec) {
+      final a = _store.accounts[pid];
+      if (a != null && a.dutySection != '$sec') {
+        a.dutySection = '$sec';
+        _updateAccount(a);
+      }
+    });
+    final gaps = dutySectionGaps(
+      assignment: assignment,
+      requiredStations: required,
+      isQualified: (p, st) => _store.isQualified(p, st),
+    );
+    if (mounted) {
+      setState(() {});
+      final msg = gaps.isEmpty
+          ? 'Built 5 duty sections — every section can man the bill'
+          : 'Built 5 sections — ${gaps.length} have coverage gaps (see warnings)';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
   // --- Admin (personnel hub) — DIVO and higher ------------------------------
 
   /// DIVO and up may open the personnel hub.
@@ -2731,6 +2781,7 @@ class _HomePageState extends State<HomePage> {
     (Icons.calendar_month, 'SKED'),
     (Icons.warning_amber, 'CASREP'),
     (Icons.event_note, 'Watchbills'),
+    (Icons.shield, 'Duty Section'),
     (Icons.workspace_premium, 'PQS'),
     (Icons.hub, 'Connection'),
     (Icons.inventory_2, 'Supply'),
@@ -2820,6 +2871,8 @@ class _HomePageState extends State<HomePage> {
         return _watchbillPage();
       case 'PQS':
         return _pqsPage();
+      case 'Duty Section':
+        return _dutySectionPage();
       case 'Admin':
         return _adminPage();
       case 'Feedback':
@@ -3258,6 +3311,141 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Duty Section — your 1/5 of the crew for the in-port duty day. Everyone
+  /// DH-and-below sees only their own section; ship-wide roles see all five and
+  /// can auto-generate the rotation.
+  Widget _dutySectionPage() {
+    final crew = _store.accounts.values
+        .where((a) => a.role != Role.kratos)
+        .toList();
+    final bySection = <String, List<Account>>{};
+    for (final a in crew) {
+      final s = a.dutySection.isEmpty ? '—' : a.dutySection;
+      (bySection[s] ??= []).add(a);
+    }
+    for (final list in bySection.values) {
+      list.sort((a, b) => a.name.compareTo(b.name));
+    }
+
+    if (!_canManageSections) {
+      // Scoped view: only my own section.
+      final mine = _account?.dutySection ?? '';
+      if (mine.isEmpty) {
+        return const Center(
+          child: Padding(
+            padding: EdgeInsets.all(32),
+            child: Text(
+              "You're not assigned to a duty section yet.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey),
+            ),
+          ),
+        );
+      }
+      final mates = bySection[mine] ?? [];
+      return Column(
+        children: [
+          _dutySectionHeader('Section $mine', mates.length, null),
+          Expanded(
+            child: ListView(
+              children: [for (final a in mates) _personnelTile(a)],
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Manager view: all five sections + auto-generate + coverage gaps.
+    final required = _inPortRequiredStations();
+    final assignment = {
+      for (final a in crew)
+        if (a.dutySection.isNotEmpty) a.id: int.tryParse(a.dutySection) ?? 0,
+    };
+    final gaps = dutySectionGaps(
+      assignment: assignment,
+      requiredStations: required,
+      isQualified: (p, st) => _store.isQualified(p, st),
+    );
+    final keys = ['1', '2', '3', '4', '5', if (bySection.containsKey('—')) '—'];
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Row(
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: _autoAssignDutySections,
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                label: const Text('Auto-generate 5 sections'),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            children: [
+              for (final k in keys)
+                if (bySection[k] != null) ...[
+                  _dutySectionHeader(
+                    k == '—' ? 'Unassigned' : 'Section $k',
+                    bySection[k]!.length,
+                    gaps[int.tryParse(k)],
+                  ),
+                  for (final a in bySection[k]!) _personnelTile(a),
+                ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _dutySectionHeader(String title, int count, List<String>? gaps) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      color: scheme.surfaceContainerHighest,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: scheme.primary,
+            ),
+          ),
+          const SizedBox(width: 10),
+          if (gaps != null && gaps.isNotEmpty)
+            Expanded(
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber, color: _duOrange, size: 15),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      "can't man: ${gaps.map((s) => _store.qualifications[s]?.abbr ?? s).join(', ')}",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _duOrange, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            const Spacer(),
+          Text(
+            '$count',
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+        ],
       ),
     );
   }

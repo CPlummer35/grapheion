@@ -177,4 +177,42 @@ void main() {
       expect({fill['r-poow|s1'], fill['r-poow|s2']}, {'a', 'b'});
     });
   });
+
+  group('duty sections', () {
+    final people = [for (var i = 1; i <= 10; i++) 'p$i'];
+    // Everyone holds 'A'; only p1 + p2 hold the scarce station 'B'.
+    bool qual(String p, String st) =>
+        st == 'A' ? true : (st == 'B' && (p == 'p1' || p == 'p2'));
+
+    test('partitions everyone into balanced fifths', () {
+      final a = assignDutySections(
+          people: people,
+          requiredStations: ['A', 'B'],
+          isQualified: qual,
+          sections: 5);
+      expect(a.length, 10);
+      expect(a.values.every((s) => s >= 1 && s <= 5), isTrue);
+      final sizes =
+          [for (var s = 1; s <= 5; s++) a.values.where((v) => v == s).length];
+      expect(sizes.reduce((x, y) => x + y), 10);
+      expect(sizes.reduce((x, y) => x > y ? x : y), 2, reason: 'even fifths');
+    });
+
+    test('spreads the scarce station, covers the common one everywhere', () {
+      final a = assignDutySections(
+          people: people, requiredStations: ['A', 'B'], isQualified: qual);
+      final gaps = dutySectionGaps(
+          assignment: a, requiredStations: ['A', 'B'], isQualified: qual);
+      expect(gaps.values.any((m) => m.contains('A')), isFalse);
+      expect(a['p1'] != a['p2'], isTrue);
+    });
+
+    test('flags coverage gaps when too few are qualified', () {
+      final a = assignDutySections(
+          people: people, requiredStations: ['A', 'B'], isQualified: qual);
+      final gaps = dutySectionGaps(
+          assignment: a, requiredStations: ['A', 'B'], isQualified: qual);
+      expect(gaps.values.where((m) => m.contains('B')).length, 3);
+    });
+  });
 }
