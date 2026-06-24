@@ -94,6 +94,25 @@ flutter run -d macos
 - **First launch shows default fonts** — `google_fonts` fetches Teko/Inter on
   first run; it needs internet once, then caches them.
 
+## Contributing upstream (peat / peat-flutter)
+
+`bootstrap-macos.sh` installs a local **DCO sign-off hook** into the `peat` and
+`peat-flutter` clones, so every commit there is auto-signed (`Signed-off-by`).
+The hook lives in `.git/hooks` (not version-controlled), so **re-run this after
+re-cloning** either repo:
+
+```sh
+./scripts/install-hooks.sh
+```
+
+To push the current branch to your fork and open a PR against upstream, run from
+inside the target repo (it has `origin` = upstream + `fork` = your fork):
+
+```sh
+cd ../peat
+../grapheion/scripts/upstream.sh --title "feat(peat-ffi): …"
+```
+
 ## Other platforms
 
 - **iOS:** same three repos + Rust; build with `peat-flutter/ios/build-rust.sh`

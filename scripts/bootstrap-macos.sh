@@ -82,6 +82,10 @@ clone_or_update() {
 clone_or_update "${PEAT_DIR}" "${PEAT_URL}" "${PEAT_BRANCH}"
 clone_or_update "${PEAT_FLUTTER_DIR}" "${PEAT_FLUTTER_URL}" "${PEAT_FLUTTER_BRANCH}"
 
+# --- install local git hooks (DCO sign-off for upstream commits) ------------
+say "Installing DCO sign-off hooks"
+bash "${SCRIPT_DIR}/install-hooks.sh"
+
 # --- build the native libraries ---------------------------------------------
 # Order matters: build-rust.sh's cargo build populates the registry cache that
 # build-btle.sh needs for the peat-btle crate.
