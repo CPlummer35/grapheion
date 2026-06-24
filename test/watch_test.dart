@@ -244,6 +244,34 @@ void main() {
         expect({fill['r-poow|s1'], fill['r-poow|s2']}, {'a', 'b'});
       },
     );
+
+    test('auto-fill gives a night watch to whoever has stood it least', () {
+      // A single rotating mid; both qualified. priorLoad models the stood-log
+      // night history. Whoever has stood it MORE is passed over.
+      Evolution mid() => Evolution(
+        id: 'ev-mid',
+        name: 'Mid',
+        shifts: [WatchShift(id: 'mid', label: 'mid', start: '2200', end: '0200')],
+        roles: [
+          EvolutionRole(
+            id: 'r-ood',
+            stationId: 'ood',
+            name: 'OOD',
+            rotating: true,
+          ),
+        ],
+      );
+      Map<String, String> fillWith(Map<String, int> prior) => autoFillBill(
+        slots: evolutionSlots(mid()),
+        people: ['a', 'b'],
+        isQualified: (_, __) => true,
+        priorLoad: (p, _) => prior[p] ?? 0,
+      );
+      // The choice follows the history, not id order: it flips when the
+      // burden flips, proving priorLoad actually drives the spread.
+      expect(fillWith({'a': 3, 'b': 1})['r-ood|mid'], 'b');
+      expect(fillWith({'a': 1, 'b': 3})['r-ood|mid'], 'a');
+    });
   });
 
   group('duty sections', () {
@@ -316,6 +344,50 @@ void main() {
       expect(back.stationName, 'Officer of the Deck (In-Port)');
       expect(back.timeLabel, '2130-0130');
       expect(back.atMs, 1000);
+    });
+
+    test('carries the recording section (defaults to empty)', () {
+      final day = DateTime(2026, 6, 24).millisecondsSinceEpoch;
+      final w = WatchStood(
+        id: WatchStood.makeId(day, 'ev', 'r', 's'),
+        personId: 'p',
+        stationName: 'S',
+        evolutionName: 'E',
+        timeLabel: '',
+        dayMs: startOfDay(day),
+        section: '3',
+        atMs: 1,
+      );
+      expect(WatchStood.fromJson(w.toJson()).section, '3');
+      // Legacy records without the field decode to ''.
+      final legacy = Map<String, dynamic>.from(w.toJson())..remove('section');
+      expect(WatchStood.fromJson(legacy).section, '');
+    });
+  });
+
+  group('duty-day events', () {
+    test('round-trips and keys by day + section + type', () {
+      final day = DateTime(2026, 6, 24, 9).millisecondsSinceEpoch;
+      final e = DutyDayEvent(
+        id: DutyDayEvent.makeId(day, '1', 'Class A Fire'),
+        dayMs: startOfDay(day),
+        section: '1',
+        type: 'Class A Fire',
+        note: 'Galley range, out in 4 min',
+        atMs: 1234,
+      );
+      expect(e.id, '${startOfDay(day)}|1|Class A Fire');
+      final back = DutyDayEvent.fromJson(e.toJson());
+      expect(back.section, '1');
+      expect(back.type, 'Class A Fire');
+      expect(back.note, 'Galley range, out in 4 min');
+      expect(back.atMs, 1234);
+    });
+
+    test('the preset list includes the common duty-day events', () {
+      expect(kDutyDayEventTypes, contains('Class A Fire'));
+      expect(kDutyDayEventTypes, contains('AT/FP Event'));
+      expect(kDutyDayEventTypes, contains('Other'));
     });
   });
 }

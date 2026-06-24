@@ -378,10 +378,17 @@ List<BillSlot> evolutionSlots(Evolution e) => [
 /// person into overlapping watches (a standing watch overlaps everything; two
 /// rotating watches overlap only if they share a shift), spreading load evenly.
 /// Returns slot.key -> personId; slots with no eligible person are left out.
+///
+/// [priorLoad], when given, is each person's HISTORICAL burden for a slot —
+/// e.g. how many times they've already stood that watch time (the mids/eves)
+/// per the stood-log. It's added to the in-bill count so auto-fill spreads the
+/// unpopular night watches across days the same way the manual picker does,
+/// instead of re-stacking the same person every time it's run.
 Map<String, String> autoFillBill({
   required List<BillSlot> slots,
   required List<String> people,
   required bool Function(String personId, String stationId) isQualified,
+  int Function(String personId, BillSlot slot)? priorLoad,
 }) {
   final result = <String, String>{};
   final load = {for (final p in people) p: 0};
@@ -402,7 +409,13 @@ Map<String, String> autoFillBill({
   for (final s in ordered) {
     final cands =
         people.where((p) => isQualified(p, s.stationId) && free(p, s)).toList()
-          ..sort((a, b) => load[a]!.compareTo(load[b]!));
+          ..sort((a, b) {
+            // Total burden = already assigned this bill + historical (night)
+            // load; least-burdened first, with a stable id tiebreak.
+            final la = load[a]! + (priorLoad?.call(a, s) ?? 0);
+            final lb = load[b]! + (priorLoad?.call(b, s) ?? 0);
+            return la != lb ? la.compareTo(lb) : a.compareTo(b);
+          });
     if (cands.isEmpty) continue;
     final pick = cands.first;
     result[s.key] = pick;
@@ -507,6 +520,7 @@ class WatchStood {
   final String evolutionName; // snapshot
   final String timeLabel; // '2130-0130', or '' for a standing watch
   final int dayMs;
+  final String section; // duty section that recorded it ('' = main watchbill)
   int atMs; // recorded-at (last-write-wins)
 
   WatchStood({
@@ -516,6 +530,7 @@ class WatchStood {
     required this.evolutionName,
     required this.timeLabel,
     required this.dayMs,
+    this.section = '',
     required this.atMs,
   });
 
@@ -533,6 +548,7 @@ class WatchStood {
     'evolutionName': evolutionName,
     'timeLabel': timeLabel,
     'dayMs': dayMs,
+    'section': section,
     'atMs': atMs,
   };
 
@@ -543,6 +559,69 @@ class WatchStood {
     evolutionName: (j['evolutionName'] ?? '') as String,
     timeLabel: (j['timeLabel'] ?? '') as String,
     dayMs: (j['dayMs'] ?? 0) as int,
+    section: (j['section'] ?? '') as String,
+    atMs: (j['atMs'] ?? 0) as int,
+  );
+}
+
+// --- Duty-day events ------------------------------------------------------
+//
+// Notable events that occurred during a recorded duty day (logged alongside
+// the stood watches when the section confirms its watchbill executed). Keyed by
+// day + section + type so re-recording updates rather than duplicates.
+
+/// Standard duty-day events offered in the record sheet. Editable — the note
+/// field captures anything not on the list (or pick "Other").
+const kDutyDayEventTypes = <String>[
+  'Class A Fire',
+  'Class B Fire',
+  'Class C Fire',
+  'Flooding',
+  'Man Overboard',
+  'Medical Emergency',
+  'AT/FP Event',
+  'Security Alert',
+  'Equipment Casualty',
+  'Loss of Power',
+  'Sortie/Recall',
+  'Other',
+];
+
+class DutyDayEvent {
+  final String id; // '{dayMs}|{section}|{type}'
+  final int dayMs;
+  final String section;
+  final String type; // one of kDutyDayEventTypes
+  final String note; // optional free text
+  int atMs; // recorded-at (last-write-wins)
+
+  DutyDayEvent({
+    required this.id,
+    required this.dayMs,
+    required this.section,
+    required this.type,
+    required this.note,
+    required this.atMs,
+  });
+
+  static String makeId(int dayMs, String section, String type) =>
+      '${startOfDay(dayMs)}|$section|$type';
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'dayMs': dayMs,
+    'section': section,
+    'type': type,
+    'note': note,
+    'atMs': atMs,
+  };
+
+  factory DutyDayEvent.fromJson(Map<String, dynamic> j) => DutyDayEvent(
+    id: j['id'] as String,
+    dayMs: (j['dayMs'] ?? 0) as int,
+    section: (j['section'] ?? '') as String,
+    type: (j['type'] ?? '') as String,
+    note: (j['note'] ?? '') as String,
     atMs: (j['atMs'] ?? 0) as int,
   );
 }

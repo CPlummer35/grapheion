@@ -35,6 +35,7 @@ const kEvolutions = 'evolutions'; // evolutions (role sets, e.g. In-Port Duty)
 const kBill = 'watchbill'; // bill entries (day x evolution x role x shift)
 const kBulletin = 'bulletin'; // duty-section bulletin posts
 const kStood = 'stood'; // append-only watch-stood log
+const kEvents = 'events'; // duty-day events logged when a watchbill is recorded
 const kFeedback =
     'feedback'; // demo feedback (anyone writes, only Kratos reads)
 
@@ -71,6 +72,7 @@ class MeshStore {
   final Map<String, BillEntry> bill = {}; // keyed by BillEntry.makeId
   final Map<String, BulletinPost> bulletin = {};
   final Map<String, WatchStood> stood = {};
+  final Map<String, DutyDayEvent> dutyEvents = {};
   final Map<String, FeedbackNote> feedback = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
@@ -118,12 +120,19 @@ class MeshStore {
         applyOrg(coll, raw);
       } else if (coll == kAccounts) {
         final acct = Account.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        accounts[acct.id] = acct;
-        if (account?.id == acct.id) {
-          // Our own account was edited remotely (admin reassigned role / work
-          // center) — adopt it live (role/name/WC derive from `account`).
-          account = acct;
-        } else {
+        final old = accounts[acct.id];
+        // Last-write-wins by updatedAtMs: ignore a stale re-broadcast (a device
+        // still holding a pre-edit copy), so an account field can't ping-pong —
+        // e.g. a duty-section assignment flickering back to "unassigned".
+        if (old == null || acct.updatedAtMs >= old.updatedAtMs) {
+          accounts[acct.id] = acct;
+          if (account?.id == acct.id) {
+            // Our own account was edited remotely (admin reassigned role / work
+            // center / duty section) — adopt the newer copy live.
+            account = acct;
+          }
+        }
+        if (account == null) {
           restoreAccount(); // our account may have just arrived (first sign-in)
         }
       } else if (coll == kCasreps) {
@@ -168,6 +177,16 @@ class MeshStore {
         final w = WatchStood.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final old = stood[docId];
         if (old == null || w.atMs >= old.atMs) stood[docId] = w; // LWW
+      } else if (coll == kEvents) {
+        final ev = DutyDayEvent.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        if (ev.type.isEmpty) {
+          dutyEvents.remove(docId); // tombstone (a cleared event)
+        } else {
+          final old = dutyEvents[docId];
+          if (old == null || ev.atMs >= old.atMs) dutyEvents[docId] = ev; // LWW
+        }
       } else if (coll == kFeedback) {
         final note = FeedbackNote.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
@@ -211,6 +230,35 @@ class MeshStore {
   List<BulletinPost> bulletinForSection(String section) =>
       bulletin.values.where((p) => p.section == section).toList()
         ..sort((a, b) => a.atMs.compareTo(b.atMs));
+
+  /// Duty-day events logged for one recorded day + section, type-sorted.
+  /// [dayMs] is a normalized start-of-day (as stored on records).
+  List<DutyDayEvent> eventsForDay(int dayMs, String section) =>
+      dutyEvents.values
+          .where((e) => e.dayMs == dayMs && e.section == section)
+          .toList()
+        ..sort((a, b) => a.type.compareTo(b.type));
+
+  /// Distinct calendar days a section has a recorded watchbill for (from the
+  /// stood-log), newest first — backs the duty-section HISTORY tab.
+  List<int> recordedDutyDays(String section) {
+    final days = <int>{
+      for (final w in stood.values)
+        if (w.section == section) w.dayMs,
+    };
+    return days.toList()..sort((a, b) => b.compareTo(a));
+  }
+
+  /// The stood watches for one recorded day + section, by time then station.
+  /// [dayMs] is a normalized start-of-day (as stored on records).
+  List<WatchStood> stoodForDay(int dayMs, String section) =>
+      stood.values
+          .where((w) => w.dayMs == dayMs && w.section == section)
+          .toList()
+        ..sort((a, b) {
+          final t = a.timeLabel.compareTo(b.timeLabel);
+          return t != 0 ? t : a.stationName.compareTo(b.stationName);
+        });
 
   // --- Watchbill / PQS queries ---------------------------------------------
 
@@ -407,6 +455,7 @@ class MeshStore {
     bill.clear();
     bulletin.clear();
     stood.clear();
+    dutyEvents.clear();
     feedback.clear();
     org.departments.clear();
     org.divisions.clear();

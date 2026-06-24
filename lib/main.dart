@@ -243,7 +243,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   PeatFlutterNode? _node;
   // Synced domain state + the apply/query/notify logic live in the (testable,
   // node-free) MeshStore; the widget owns the node, BLE, onboarding and UI and
@@ -300,7 +300,23 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _restoreIdentity();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back to the foreground: the mesh node was likely suspended by the
+    // OS, so clear backoff, re-dial known peers, and pull immediately — so we
+    // don't have to restart the app to catch changes made while we were away.
+    if (state == AppLifecycleState.resumed) {
+      final n = _node;
+      if (n != null) {
+        try {
+          n.wakeReconnect();
+        } catch (_) {}
+      }
+    }
   }
 
   String _genKey() {
@@ -346,9 +362,17 @@ class _HomePageState extends State<HomePage> {
 
   /// Adopt [a] as the signed-in identity (role/name/work center derive from it).
   void _setAccount(Account a) {
-    _store.account = a;
-    _store.pendingAccountId = a.id;
-    SharedPreferences.getInstance().then((p) => p.setString('accountId', a.id));
+    // Adopt the freshest synced copy if we have one. The sign-in list can hand
+    // us a stale Account object (captured before an admin assigned a duty
+    // section / role / work center), which would otherwise leave the live
+    // identity behind what Admin already shows — e.g. "not assigned to a duty
+    // section" even though the account is in section 1.
+    final fresh = _store.accounts[a.id] ?? a;
+    _store.account = fresh;
+    _store.pendingAccountId = fresh.id;
+    SharedPreferences.getInstance().then(
+      (p) => p.setString('accountId', fresh.id),
+    );
     _publishPresence();
     if (mounted) setState(() {});
   }
@@ -437,6 +461,7 @@ class _HomePageState extends State<HomePage> {
   /// Admin action: persist an edited account (e.g. adjusting a self-registered
   /// person's role / work center).
   void _updateAccount(Account a) {
+    a.updatedAtMs = DateTime.now().millisecondsSinceEpoch; // newest wins on sync
     _accounts[a.id] = a;
     final json = jsonEncode(a.toJson());
     _node!.putRaw(kAccounts, a.id, json);
@@ -446,6 +471,62 @@ class _HomePageState extends State<HomePage> {
       _store.account = a;
     }
     if (mounted) setState(() {});
+  }
+
+  /// Admin migration: stamp every account with a fresh `updatedAtMs` and
+  /// re-broadcast THIS device's copies, so this node's (authoritative) account
+  /// data wins the last-write-wins race everywhere — pulling stragglers into
+  /// convergence (e.g. pre-timestamp duty-section assignments stuck on an old
+  /// device). Run from the node that holds the correct assignments.
+  void _restampAllAccounts() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var n = 0;
+    for (final a in _store.accounts.values.toList()) {
+      a.updatedAtMs = now;
+      final json = jsonEncode(a.toJson());
+      _node!.putRaw(kAccounts, a.id, json);
+      _bleBroadcast(kAccounts, a.id, json);
+      n++;
+    }
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "Re-stamped $n account${n == 1 ? '' : 's'} — this device's data now wins sync",
+          ),
+        ),
+      );
+    }
+  }
+
+  void _confirmRestampAccounts() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Re-stamp all accounts?'),
+        content: Text(
+          "Pushes THIS device's ${_store.accounts.length} account records as the "
+          'newest version across the mesh — the duty sections, roles, and work '
+          'centers shown here will override stale copies on other devices.\n\n'
+          'Use this from the node with the correct assignments (e.g. when an old '
+          'device is showing the wrong/empty duty section).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _restampAllAccounts();
+            },
+            child: const Text('Re-stamp'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Sign out of the account but stay in the mesh (node + key live on).
@@ -550,6 +631,20 @@ class _HomePageState extends State<HomePage> {
       );
       _tickTimer = Timer.periodic(const Duration(seconds: 5), (_) {
         _refreshTransports();
+        // Iroh catch-up: keep the reconnect roster fresh with everyone we're
+        // actually connected to (incl. a hidden Kratos peer we never explicitly
+        // "joined"), re-dial any that dropped (respects backoff), and pull the
+        // latest from connected peers — so changes converge without an app
+        // restart after the OS suspends us or a link goes idle.
+        final n = _node;
+        if (n != null) {
+          try {
+            for (final p in n.connectedPeers) {
+              n.rememberPeer(groupId: _kAppId, nodeId: p, name: '');
+            }
+            n.reconnectKnownPeers();
+          } catch (_) {}
+        }
         // Periodic BLE catch-up gossip (every other tick ~10s): re-broadcast
         // jobs so a handheld that just came into range converges.
         if (_bleRunning && (_gossipTick++).isEven) {
@@ -593,6 +688,9 @@ class _HomePageState extends State<HomePage> {
           for (final w in _store.stood.values) {
             _bleBroadcast(kStood, w.id, jsonEncode(w.toJson()));
           }
+          for (final e in _store.dutyEvents.values) {
+            _bleBroadcast(kEvents, e.id, jsonEncode(e.toJson()));
+          }
           for (final f in _store.feedback.values) {
             _bleBroadcast(kFeedback, f.id, jsonEncode(f.toJson()));
           }
@@ -606,6 +704,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _presenceTimer?.cancel();
     _tickTimer?.cancel();
     _bleRxSub?.cancel();
@@ -1049,6 +1148,7 @@ class _HomePageState extends State<HomePage> {
       kBill,
       kBulletin,
       kStood,
+      kEvents,
       kFeedback,
     ]) {
       for (final id in node.listDocuments(coll)) {
@@ -1185,10 +1285,28 @@ class _HomePageState extends State<HomePage> {
       slots: slots,
       people: _store.accounts.keys.toList(),
       isQualified: (p, st) => _store.isQualified(p, st),
+      priorLoad: _priorWatchLoad(ev),
     );
     for (final s in slots) {
       _setBillEntry(dayMs, ev.id, s.roleId, s.shiftId, fill[s.key]);
     }
+  }
+
+  /// Per-person historical burden for [autoFillBill], from the stood-log: how
+  /// many times someone has stood a slot's watch TIME (the mids/eves), or their
+  /// total for a standing watch. This is what makes auto-fill spread the
+  /// unpopular night watches across days the same way the manual `_openBillAssign`
+  /// picker does — instead of re-stacking the same person every time it's run.
+  int Function(String, BillSlot) _priorWatchLoad(Evolution ev) {
+    final shiftTime = {
+      for (final s in ev.shifts) s.id: '${s.start}-${s.end}',
+    };
+    return (pid, slot) {
+      final h = _personWatchHistory(pid);
+      if (slot.standing) return h.total;
+      final t = shiftTime[slot.shiftId];
+      return t == null ? 0 : (h.byTime[t] ?? 0);
+    };
   }
 
   /// Create + sync a new watch-station qualification (used by the evolution
@@ -1791,6 +1909,7 @@ class _HomePageState extends State<HomePage> {
       slots: slots,
       people: _sectionMemberIds(section),
       isQualified: (p, st) => _store.isQualified(p, st),
+      priorLoad: _priorWatchLoad(ev),
     );
     for (final s in slots) {
       _setBillEntry(day, ev.id, s.roleId, s.shiftId, fill[s.key]);
@@ -1811,13 +1930,30 @@ class _HomePageState extends State<HomePage> {
     _bleBroadcast(kStood, w.id, json);
   }
 
-  /// Commit [ev]'s filled bill for [dayMs] into the permanent stood-log — each
-  /// filled slot becomes a confirmed watch stood (idempotent per slot).
-  void _recordWatches(Evolution ev, int dayMs) {
+  /// Commit [ev]'s filled bill into the permanent stood-log — each filled slot
+  /// becomes a confirmed watch stood (idempotent per slot). Assignments are read
+  /// from [billDayMs] (where the editable bill lives); the stood entries are
+  /// stamped with [recordDayMs] — the real calendar day, defaulting to billDayMs
+  /// — and [section], so a section's recording snapshots to a dated, browsable
+  /// duty day (and the night-balance counts accumulate across real days).
+  /// Returns the number of watches recorded.
+  int _recordWatches(
+    Evolution ev,
+    int billDayMs, {
+    int? recordDayMs,
+    String section = '',
+    bool snack = true,
+  }) {
+    final recDay = recordDayMs ?? billDayMs;
     var n = 0;
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final slot in evolutionSlots(ev)) {
-      final pid = _store.billAssignee(dayMs, ev.id, slot.roleId, slot.shiftId);
+      final pid = _store.billAssignee(
+        billDayMs,
+        ev.id,
+        slot.roleId,
+        slot.shiftId,
+      );
       if (pid == null || pid.isEmpty) continue;
       EvolutionRole? role;
       for (final r in ev.roles) {
@@ -1840,12 +1976,13 @@ class _HomePageState extends State<HomePage> {
       }
       _saveStood(
         WatchStood(
-          id: WatchStood.makeId(dayMs, ev.id, slot.roleId, slot.shiftId),
+          id: WatchStood.makeId(recDay, ev.id, slot.roleId, slot.shiftId),
           personId: pid,
           stationName: stationName,
           evolutionName: ev.name,
           timeLabel: timeLabel,
-          dayMs: startOfDay(dayMs),
+          dayMs: startOfDay(recDay),
+          section: section,
           atMs: now,
         ),
       );
@@ -1853,10 +1990,131 @@ class _HomePageState extends State<HomePage> {
     }
     if (mounted) {
       setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Recorded $n watch${n == 1 ? '' : 'es'} stood')),
-      );
+      if (snack) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Recorded $n watch${n == 1 ? '' : 'es'} stood'),
+          ),
+        );
+      }
     }
+    return n;
+  }
+
+  /// Sync a duty-day event (or tombstone it by saving an empty-type record).
+  void _saveDutyEvent(DutyDayEvent e) {
+    final json = jsonEncode(e.toJson());
+    _store.dutyEvents[e.id] = e;
+    _node!.putRaw(kEvents, e.id, json);
+    _bleBroadcast(kEvents, e.id, json);
+  }
+
+  /// Record a duty section's duty day: pick the events that occurred, then
+  /// commit the watchbill (snapshotted to today's real date) + the events.
+  void _openRecordDutyDay(Evolution ev, String section) {
+    final selected = <String>{};
+    final noteCtrl = TextEditingController();
+    final today = DateTime.now().millisecondsSinceEpoch;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              16 + MediaQuery.of(ctx).viewInsets.bottom,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Record Section $section duty day',
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Log any notable events from the duty day, then confirm.',
+                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      for (final t in kDutyDayEventTypes)
+                        FilterChip(
+                          label: Text(t),
+                          selected: selected.contains(t),
+                          onSelected: (v) => setS(
+                            () => v ? selected.add(t) : selected.remove(t),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Note (optional)',
+                      border: OutlineInputBorder(),
+                      hintText: 'Details / other events',
+                    ),
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.check),
+                      label: const Text('Record duty day'),
+                      onPressed: () {
+                        final n = _recordWatches(
+                          ev,
+                          _sectionDayMs(section),
+                          recordDayMs: today,
+                          section: section,
+                          snack: false,
+                        );
+                        final note = noteCtrl.text.trim();
+                        for (final t in selected) {
+                          _saveDutyEvent(
+                            DutyDayEvent(
+                              id: DutyDayEvent.makeId(today, section, t),
+                              dayMs: startOfDay(today),
+                              section: section,
+                              type: t,
+                              note: note,
+                              atMs: DateTime.now().millisecondsSinceEpoch,
+                            ),
+                          );
+                        }
+                        Navigator.pop(ctx);
+                        if (mounted) {
+                          setState(() {});
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Recorded $n watch${n == 1 ? '' : 'es'}'
+                                '${selected.isEmpty ? '' : ' + ${selected.length} event(s)'}',
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _postBulletin(String section, String text) {
@@ -3476,7 +3734,7 @@ class _HomePageState extends State<HomePage> {
     final ev = _inPortEvolution();
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(
         children: [
           if (manager) _dsManagerBar(),
@@ -3486,10 +3744,12 @@ class _HomePageState extends State<HomePage> {
             secGaps.isEmpty ? null : secGaps,
           ),
           const TabBar(
+            isScrollable: true,
             tabs: [
               Tab(text: 'ROSTER'),
               Tab(text: 'WATCHBILL'),
               Tab(text: 'BULLETIN'),
+              Tab(text: 'HISTORY'),
             ],
           ),
           Expanded(
@@ -3508,6 +3768,7 @@ class _HomePageState extends State<HomePage> {
                       ),
                 _dsWatchbill(ev, section, memberIds),
                 _dsBulletin(section),
+                _dsHistory(section),
               ],
             ),
           ),
@@ -3595,9 +3856,9 @@ class _HomePageState extends State<HomePage> {
                   label: const Text('Auto-fill from section'),
                 ),
                 TextButton.icon(
-                  onPressed: () => _recordWatches(ev, _sectionDayMs(section)),
+                  onPressed: () => _openRecordDutyDay(ev, section),
                   icon: const Icon(Icons.fact_check_outlined, size: 18),
-                  label: const Text('Record'),
+                  label: const Text('Record duty day'),
                 ),
                 TextButton.icon(
                   onPressed: () => _clearSectionBill(ev, section),
@@ -3628,6 +3889,75 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Past recorded duty days for a section, newest first — each expands to the
+  /// watchbill that was stood that day plus any logged duty-day events.
+  Widget _dsHistory(String section) {
+    final days = _store.recordedDutyDays(section);
+    if (days.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text(
+            'No recorded duty days yet.\n'
+            'Use "Record duty day" on the Watchbill tab to log one.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey),
+          ),
+        ),
+      );
+    }
+    return ListView(
+      children: [
+        for (final day in days)
+          _dsHistoryCard(
+            day,
+            _store.stoodForDay(day, section),
+            _store.eventsForDay(day, section),
+          ),
+      ],
+    );
+  }
+
+  Widget _dsHistoryCard(
+    int day,
+    List<WatchStood> watches,
+    List<DutyDayEvent> events,
+  ) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: ExpansionTile(
+        title: Text('${weekdayLabel(day)}   ${_shortDate(day)}'),
+        subtitle: Text(
+          '${watches.length} watch${watches.length == 1 ? '' : 'es'}'
+          '${events.isEmpty ? '' : ' · ${events.length} event${events.length == 1 ? '' : 's'}'}',
+        ),
+        children: [
+          for (final w in watches)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.schedule, size: 18),
+              title: Text(w.stationName),
+              subtitle: Text(w.timeLabel.isEmpty ? 'Standing watch' : w.timeLabel),
+              trailing: Text(_billPersonLabel(w.personId)),
+            ),
+          if (events.isNotEmpty)
+            const Divider(height: 1, indent: 16, endIndent: 16),
+          for (final e in events)
+            ListTile(
+              dense: true,
+              leading: const Icon(
+                Icons.warning_amber_rounded,
+                size: 18,
+                color: Colors.orange,
+              ),
+              title: Text(e.type),
+              subtitle: e.note.isEmpty ? null : Text(e.note),
+            ),
+        ],
+      ),
     );
   }
 
@@ -3851,6 +4181,13 @@ class _HomePageState extends State<HomePage> {
               onSelected: (_) => setState(() => _adminSort = s),
             ),
           ),
+        const Spacer(),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Re-stamp all accounts (force sync convergence)',
+          icon: const Icon(Icons.published_with_changes, size: 20),
+          onPressed: _confirmRestampAccounts,
+        ),
       ],
     ),
   );

@@ -85,6 +85,26 @@ void main() {
       expect(store.role, Role.lpo);
       expect(store.accounts['other']?.role, Role.divo);
     });
+    test('apply is last-write-wins — a stale rebroadcast cannot oscillate it', () {
+      String appyJson(String section, int updated) => jsonEncode(
+        (_acct('appy', 'Appy', Role.lpo)
+              ..dutySection = section
+              ..updatedAtMs = updated)
+            .toJson(),
+      );
+      store.account = _acct('appy', 'Appy', Role.lpo);
+      // Assigned to section 1 (newer write) — adopted live.
+      store.applyDoc(kAccounts, 'appy', appyJson('1', 2), remote: true);
+      expect(store.accounts['appy']!.dutySection, '1');
+      expect(store.account!.dutySection, '1', reason: 'adopted live');
+      // A stale re-broadcast (older updatedAtMs) must NOT revert it.
+      store.applyDoc(kAccounts, 'appy', appyJson('', 1), remote: true);
+      expect(store.accounts['appy']!.dutySection, '1', reason: 'stale ignored');
+      expect(store.account!.dutySection, '1');
+      // A genuinely newer un-assign does apply.
+      store.applyDoc(kAccounts, 'appy', appyJson('', 3), remote: true);
+      expect(store.accounts['appy']!.dutySection, '');
+    });
   });
 
   group(
@@ -251,4 +271,108 @@ void main() {
       });
     },
   );
+
+  group('applyDoc: duty-day events + history queries', () {
+    String evJson(
+      int day,
+      String section,
+      String type, {
+      String note = '',
+      int atMs = 1,
+    }) => jsonEncode(
+      DutyDayEvent(
+        id: DutyDayEvent.makeId(day, section, type),
+        dayMs: day,
+        section: section,
+        type: type,
+        note: note,
+        atMs: atMs,
+      ).toJson(),
+    );
+
+    String stoodJson(
+      int day,
+      String section,
+      String role,
+      String person, {
+      String time = '',
+    }) => jsonEncode(
+      WatchStood(
+        id: '$day|$section|ev|$role|s',
+        personId: person,
+        stationName: role,
+        evolutionName: 'In-Port',
+        timeLabel: time,
+        dayMs: day,
+        section: section,
+        atMs: 1,
+      ).toJson(),
+    );
+
+    test('applies an event and surfaces it scoped to day + section', () {
+      final id = DutyDayEvent.makeId(100, '1', 'Flooding');
+      store.applyDoc(kEvents, id, evJson(100, '1', 'Flooding'), remote: true);
+      expect(store.eventsForDay(100, '1').map((e) => e.type), ['Flooding']);
+      expect(store.eventsForDay(100, '2'), isEmpty); // other section
+      expect(store.eventsForDay(200, '1'), isEmpty); // other day
+    });
+
+    test('LWW by atMs; empty-type record tombstones', () {
+      final id = DutyDayEvent.makeId(100, '1', 'Flooding');
+      store.applyDoc(
+        kEvents,
+        id,
+        evJson(100, '1', 'Flooding', note: 'a', atMs: 2),
+        remote: true,
+      );
+      store.applyDoc(
+        kEvents,
+        id,
+        evJson(100, '1', 'Flooding', note: 'stale', atMs: 1),
+        remote: true,
+      );
+      expect(store.eventsForDay(100, '1').single.note, 'a', reason: 'older loses');
+      store.applyDoc(
+        kEvents,
+        id,
+        jsonEncode(
+          DutyDayEvent(
+            id: id,
+            dayMs: 100,
+            section: '1',
+            type: '',
+            note: '',
+            atMs: 3,
+          ).toJson(),
+        ),
+        remote: true,
+      );
+      expect(store.eventsForDay(100, '1'), isEmpty, reason: 'tombstoned');
+    });
+
+    test('recordedDutyDays + stoodForDay group the stood-log by section/day', () {
+      store.applyDoc(
+        kStood,
+        '100|1|ev|ood|s',
+        stoodJson(100, '1', 'ood', 'alice', time: '2200-0200'),
+        remote: true,
+      );
+      store.applyDoc(
+        kStood,
+        '200|1|ev|ood|s',
+        stoodJson(200, '1', 'ood', 'bob'),
+        remote: true,
+      );
+      store.applyDoc(
+        kStood,
+        '100|2|ev|ood|s',
+        stoodJson(100, '2', 'ood', 'carol'),
+        remote: true,
+      );
+      expect(store.recordedDutyDays('1'), [200, 100], reason: 'newest first');
+      expect(store.recordedDutyDays('2'), [100]);
+      expect(store.stoodForDay(100, '1').map((w) => w.personId), ['alice']);
+      expect(store.stoodForDay(100, '2').map((w) => w.personId), ['carol']);
+    });
+  });
 }

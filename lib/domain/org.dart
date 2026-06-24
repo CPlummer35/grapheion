@@ -176,6 +176,7 @@ class Account {
   String dutySection; // in-port duty section, e.g. "1".."5" ('' = unassigned)
   String billet; // WQSB billet / assigned position (free text, '' = none)
   final int createdAtMs;
+  int updatedAtMs; // bumped on every edit; drives last-write-wins on sync
 
   Account({
     required this.id,
@@ -189,6 +190,7 @@ class Account {
     this.dutySection = '',
     this.billet = '',
     required this.createdAtMs,
+    this.updatedAtMs = 0,
   }) : roleToken = role.token;
 
   /// The role this build understands (falls back to technician for unknown
@@ -214,6 +216,7 @@ class Account {
     'dutySection': dutySection,
     'billet': billet,
     'createdAtMs': createdAtMs,
+    'updatedAtMs': updatedAtMs,
   };
 
   factory Account.fromJson(Map<String, dynamic> j) {
@@ -230,6 +233,7 @@ class Account {
         dutySection: (j['dutySection'] ?? '') as String,
         billet: (j['billet'] ?? '') as String,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
+        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       )
       ..roleToken =
           raw; // preserve the exact token, even if unknown to this build
