@@ -7,16 +7,16 @@ import 'package:grapheion/domain/sked.dart';
 const _day = 86400000;
 
 PmsCheck _weekly({int created = 1000}) => PmsCheck.create(
-      id: 'P1',
-      mip: '5921/023-14',
-      seq: 1,
-      title: 'Lube main shaft bearing',
-      ein: 'EIN-1',
-      workcenter: 'CP01',
-      periodicity: Periodicity.weekly,
-      estMinutes: 30,
-      nowMs: created,
-    );
+  id: 'P1',
+  mip: '5921/023-14',
+  seq: 1,
+  title: 'Lube main shaft bearing',
+  ein: 'EIN-1',
+  workcenter: 'CP01',
+  periodicity: Periodicity.weekly,
+  estMinutes: 30,
+  nowMs: created,
+);
 
 void main() {
   group('periodicity', () {

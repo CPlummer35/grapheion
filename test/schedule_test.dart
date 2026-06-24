@@ -21,8 +21,14 @@ void main() {
   test('weekDays is 7 consecutive days, Monday..Sunday', () {
     final days = weekDays(someDay);
     expect(days.length, 7);
-    expect(DateTime.fromMillisecondsSinceEpoch(days.first).weekday, DateTime.monday);
-    expect(DateTime.fromMillisecondsSinceEpoch(days.last).weekday, DateTime.sunday);
+    expect(
+      DateTime.fromMillisecondsSinceEpoch(days.first).weekday,
+      DateTime.monday,
+    );
+    expect(
+      DateTime.fromMillisecondsSinceEpoch(days.last).weekday,
+      DateTime.sunday,
+    );
     for (var i = 0; i < 7; i++) {
       expect(weekdayLabel(days[i]), weekdayShort[i]);
     }
@@ -51,20 +57,30 @@ void main() {
     final futureDay = today + 2 * 86400000;
 
     test('not done + past day -> missed', () {
-      expect(schedOutcome(done: false, dayMs: pastDay, nowMs: now),
-          SchedOutcome.missed);
+      expect(
+        schedOutcome(done: false, dayMs: pastDay, nowMs: now),
+        SchedOutcome.missed,
+      );
     });
     test('done -> done regardless of which day', () {
-      expect(schedOutcome(done: true, dayMs: pastDay, nowMs: now),
-          SchedOutcome.done);
-      expect(schedOutcome(done: true, dayMs: today, nowMs: now),
-          SchedOutcome.done);
+      expect(
+        schedOutcome(done: true, dayMs: pastDay, nowMs: now),
+        SchedOutcome.done,
+      );
+      expect(
+        schedOutcome(done: true, dayMs: today, nowMs: now),
+        SchedOutcome.done,
+      );
     });
     test('not done + today or future -> upcoming', () {
-      expect(schedOutcome(done: false, dayMs: today, nowMs: now),
-          SchedOutcome.upcoming);
-      expect(schedOutcome(done: false, dayMs: futureDay, nowMs: now),
-          SchedOutcome.upcoming);
+      expect(
+        schedOutcome(done: false, dayMs: today, nowMs: now),
+        SchedOutcome.upcoming,
+      );
+      expect(
+        schedOutcome(done: false, dayMs: futureDay, nowMs: now),
+        SchedOutcome.upcoming,
+      );
     });
   });
 }

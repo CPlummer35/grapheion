@@ -590,6 +590,9 @@ class _HomePageState extends State<HomePage> {
           for (final b in _store.bulletin.values) {
             _bleBroadcast(kBulletin, b.id, jsonEncode(b.toJson()));
           }
+          for (final w in _store.stood.values) {
+            _bleBroadcast(kStood, w.id, jsonEncode(w.toJson()));
+          }
           for (final f in _store.feedback.values) {
             _bleBroadcast(kFeedback, f.id, jsonEncode(f.toJson()));
           }
@@ -1045,6 +1048,7 @@ class _HomePageState extends State<HomePage> {
       kEvolutions,
       kBill,
       kBulletin,
+      kStood,
       kFeedback,
     ]) {
       for (final id in node.listDocuments(coll)) {
@@ -1800,6 +1804,61 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _saveStood(WatchStood w) {
+    final json = jsonEncode(w.toJson());
+    _store.stood[w.id] = w;
+    _node!.putRaw(kStood, w.id, json);
+    _bleBroadcast(kStood, w.id, json);
+  }
+
+  /// Commit [ev]'s filled bill for [dayMs] into the permanent stood-log — each
+  /// filled slot becomes a confirmed watch stood (idempotent per slot).
+  void _recordWatches(Evolution ev, int dayMs) {
+    var n = 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final slot in evolutionSlots(ev)) {
+      final pid = _store.billAssignee(dayMs, ev.id, slot.roleId, slot.shiftId);
+      if (pid == null || pid.isEmpty) continue;
+      EvolutionRole? role;
+      for (final r in ev.roles) {
+        if (r.id == slot.roleId) {
+          role = r;
+          break;
+        }
+      }
+      final stationName = role == null
+          ? slot.roleId
+          : (_store.qualifications[role.stationId]?.name ?? role.name);
+      var timeLabel = '';
+      if (slot.shiftId.isNotEmpty) {
+        for (final s in ev.shifts) {
+          if (s.id == slot.shiftId) {
+            timeLabel = '${s.start}-${s.end}';
+            break;
+          }
+        }
+      }
+      _saveStood(
+        WatchStood(
+          id: WatchStood.makeId(dayMs, ev.id, slot.roleId, slot.shiftId),
+          personId: pid,
+          stationName: stationName,
+          evolutionName: ev.name,
+          timeLabel: timeLabel,
+          dayMs: startOfDay(dayMs),
+          atMs: now,
+        ),
+      );
+      n++;
+    }
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Recorded $n watch${n == 1 ? '' : 'es'} stood')),
+      );
+    }
+  }
+
   void _postBulletin(String section, String text) {
     final t = text.trim();
     if (t.isEmpty) return;
@@ -1887,9 +1946,10 @@ class _HomePageState extends State<HomePage> {
     return out;
   }
 
-  /// Watch-standing history for a person, derived from the bill: how many
-  /// watches stood total, broken down by station, by evolution, and by time
-  /// slot (so you can spread the unpopular mid/morning watches fairly).
+  /// Confirmed watch-standing history for a person, from the stood-log: how
+  /// many watches stood total, by station, by evolution, and by time slot (so
+  /// you can spread the unpopular mid/morning watches fairly). Permanent —
+  /// survives bill edits; populated by "Record watches" on a bill.
   ({
     int total,
     Map<String, int> byStation,
@@ -1901,30 +1961,12 @@ class _HomePageState extends State<HomePage> {
     final byEvolution = <String, int>{};
     final byTime = <String, int>{};
     var total = 0;
-    for (final e in _store.bill.values) {
-      if (e.personId.isEmpty || e.personId != personId) continue;
-      final ev = _store.evolutions[e.evolutionId];
-      if (ev == null) continue;
-      EvolutionRole? role;
-      for (final r in ev.roles) {
-        if (r.id == e.roleId) {
-          role = r;
-          break;
-        }
-      }
-      final station = role == null
-          ? e.roleId
-          : (_store.qualifications[role.stationId]?.name ?? role.name);
-      byStation[station] = (byStation[station] ?? 0) + 1;
-      byEvolution[ev.name] = (byEvolution[ev.name] ?? 0) + 1;
-      if (e.shiftId.isNotEmpty) {
-        for (final s in ev.shifts) {
-          if (s.id == e.shiftId) {
-            final t = '${s.start}-${s.end}';
-            byTime[t] = (byTime[t] ?? 0) + 1;
-            break;
-          }
-        }
+    for (final w in _store.stood.values) {
+      if (w.personId != personId) continue;
+      byStation[w.stationName] = (byStation[w.stationName] ?? 0) + 1;
+      byEvolution[w.evolutionName] = (byEvolution[w.evolutionName] ?? 0) + 1;
+      if (w.timeLabel.isNotEmpty) {
+        byTime[w.timeLabel] = (byTime[w.timeLabel] ?? 0) + 1;
       }
       total++;
     }
@@ -3163,6 +3205,11 @@ class _HomePageState extends State<HomePage> {
                   label: const Text('Auto-generate'),
                 ),
                 TextButton.icon(
+                  onPressed: () => _recordWatches(ev, day),
+                  icon: const Icon(Icons.fact_check_outlined, size: 18),
+                  label: const Text('Record'),
+                ),
+                TextButton.icon(
                   onPressed: () => _clearBill(ev, day),
                   icon: const Icon(Icons.clear_all, size: 18),
                   label: const Text('Clear'),
@@ -3546,6 +3593,11 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () => _autoFillSectionBill(ev, section),
                   icon: const Icon(Icons.auto_fix_high, size: 18),
                   label: const Text('Auto-fill from section'),
+                ),
+                TextButton.icon(
+                  onPressed: () => _recordWatches(ev, _sectionDayMs(section)),
+                  icon: const Icon(Icons.fact_check_outlined, size: 18),
+                  label: const Text('Record'),
                 ),
                 TextButton.icon(
                   onPressed: () => _clearSectionBill(ev, section),

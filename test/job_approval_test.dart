@@ -6,15 +6,15 @@ import 'package:grapheion/domain/chain.dart';
 import 'package:grapheion/domain/job.dart';
 
 Job _make({int priority = 2}) => Job.originate(
-      id: 'JOB-1',
-      title: 'Main pump seal leak',
-      ein: 'EIN-1',
-      symptom: 'leak',
-      priority: priority,
-      originator: 'MM2 Tester',
-      workcenter: 'CP01',
-      nowMs: 1000,
-    );
+  id: 'JOB-1',
+  title: 'Main pump seal leak',
+  ein: 'EIN-1',
+  symptom: 'leak',
+  priority: priority,
+  originator: 'MM2 Tester',
+  workcenter: 'CP01',
+  nowMs: 1000,
+);
 
 void main() {
   group('originate', () {
@@ -40,8 +40,11 @@ void main() {
       expect(j.phase, JobPhase.approval);
 
       j.approve(4000);
-      expect(j.phase, JobPhase.execution,
-          reason: 'DIVO approval drops the job into execution');
+      expect(
+        j.phase,
+        JobPhase.execution,
+        reason: 'DIVO approval drops the job into execution',
+      );
       expect(j.approver, Role.technician);
     });
 

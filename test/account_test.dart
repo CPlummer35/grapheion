@@ -37,7 +37,13 @@ void main() {
       expect(_acct(Role.threeMC).isAdmin, isTrue);
     });
     test('everyone else is not', () {
-      for (final r in [Role.technician, Role.wcs, Role.lpo, Role.dh, Role.portEngineer]) {
+      for (final r in [
+        Role.technician,
+        Role.wcs,
+        Role.lpo,
+        Role.dh,
+        Role.portEngineer,
+      ]) {
         expect(_acct(r).isAdmin, isFalse, reason: r.name);
       }
     });

@@ -72,7 +72,11 @@ void main() {
     });
 
     test('org entities round-trip', () {
-      final w = WorkCenter(id: 'CP01', name: 'Main Propulsion', divisionId: 'M');
+      final w = WorkCenter(
+        id: 'CP01',
+        name: 'Main Propulsion',
+        divisionId: 'M',
+      );
       final back = WorkCenter.fromJson(w.toJson());
       expect(back.id, 'CP01');
       expect(back.divisionId, 'M');

@@ -4,27 +4,35 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:grapheion/domain/schedule.dart';
 import 'package:grapheion/domain/watch.dart';
 
-Qualification _q(String id, QualType type,
-        {List<String>? prereqs, int? hours}) =>
-    Qualification(
-        id: id,
-        name: id,
-        abbr: id,
-        type: type,
-        prereqIds: prereqs,
-        hoursRequired: hours);
+Qualification _q(
+  String id,
+  QualType type, {
+  List<String>? prereqs,
+  int? hours,
+}) => Qualification(
+  id: id,
+  name: id,
+  abbr: id,
+  type: type,
+  prereqIds: prereqs,
+  hoursRequired: hours,
+);
 
-PersonQual _pq(String person, String qual, QualStage stage,
-        {int percent = 0, int hours = 0}) =>
-    PersonQual(
-      id: PersonQual.makeId(person, qual),
-      personId: person,
-      qualId: qual,
-      stage: stage,
-      percent: percent,
-      hoursLogged: hours,
-      updatedAtMs: 0,
-    );
+PersonQual _pq(
+  String person,
+  String qual,
+  QualStage stage, {
+  int percent = 0,
+  int hours = 0,
+}) => PersonQual(
+  id: PersonQual.makeId(person, qual),
+  personId: person,
+  qualId: qual,
+  stage: stage,
+  percent: percent,
+  hoursLogged: hours,
+  updatedAtMs: 0,
+);
 
 void main() {
   group('enums round-trip', () {
@@ -39,11 +47,14 @@ void main() {
     });
   });
 
-
   group('Qualification', () {
     test('round-trips with type, prereqs, hours', () {
-      final q = _q('swo', QualType.designation,
-          prereqs: ['ood-uw', 'cicwo'], hours: 100);
+      final q = _q(
+        'swo',
+        QualType.designation,
+        prereqs: ['ood-uw', 'cicwo'],
+        hours: 100,
+      );
       final back = Qualification.fromJson(q.toJson());
       expect(back.type, QualType.designation);
       expect(back.prereqIds, ['ood-uw', 'cicwo']);
@@ -57,8 +68,13 @@ void main() {
 
   group('PersonQual', () {
     test('stable id, isQualified, round-trip', () {
-      final pq = _pq('acct-1', 'ood-uw', QualStage.qualified,
-          percent: 100, hours: 120);
+      final pq = _pq(
+        'acct-1',
+        'ood-uw',
+        QualStage.qualified,
+        percent: 100,
+        hours: 120,
+      );
       expect(pq.id, 'acct-1|ood-uw');
       expect(pq.isQualified, isTrue);
       final back = PersonQual.fromJson(pq.toJson());
@@ -72,8 +88,12 @@ void main() {
   });
 
   group('qualification tree', () {
-    final swo = _q('swo', QualType.designation,
-        prereqs: ['ood-uw', 'cicwo', '3m'], hours: 100);
+    final swo = _q(
+      'swo',
+      QualType.designation,
+      prereqs: ['ood-uw', 'cicwo', '3m'],
+      hours: 100,
+    );
 
     test('prereqsMet / missingPrereqs', () {
       final none = <String>{};
@@ -88,34 +108,76 @@ void main() {
     test('readyToBoard needs prereqs + 100% + hours, and not already done', () {
       final all = {'ood-uw', 'cicwo', '3m'};
       // prereqs done but line items incomplete
-      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 80, hours: 120), all), isFalse);
+      expect(
+        readyToBoard(
+          swo,
+          _pq('a', 'swo', QualStage.inProgress, percent: 80, hours: 120),
+          all,
+        ),
+        isFalse,
+      );
       // 100% but short on hours
-      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 50), all), isFalse);
+      expect(
+        readyToBoard(
+          swo,
+          _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 50),
+          all,
+        ),
+        isFalse,
+      );
       // prereqs missing
-      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 120), {'ood-uw'}), isFalse);
+      expect(
+        readyToBoard(
+          swo,
+          _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 120),
+          {'ood-uw'},
+        ),
+        isFalse,
+      );
       // everything in place
-      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 120), all), isTrue);
+      expect(
+        readyToBoard(
+          swo,
+          _pq('a', 'swo', QualStage.inProgress, percent: 100, hours: 120),
+          all,
+        ),
+        isTrue,
+      );
       // already qualified
-      expect(readyToBoard(swo, _pq('a', 'swo', QualStage.qualified, percent: 100, hours: 120), all), isFalse);
+      expect(
+        readyToBoard(
+          swo,
+          _pq('a', 'swo', QualStage.qualified, percent: 100, hours: 120),
+          all,
+        ),
+        isFalse,
+      );
     });
   });
 
-
   group('evolution + watchbill', () {
     Evolution ev() => Evolution(
-          id: 'ev',
-          name: 'In-Port Duty',
-          shifts: [
-            WatchShift(id: 's1', label: '1', start: '0630', end: '1130'),
-            WatchShift(id: 's2', label: '2', start: '1130', end: '1630'),
-          ],
-          roles: [
-            EvolutionRole(
-                id: 'r-cdo', stationId: 'cdo', name: 'CDO', rotating: false),
-            EvolutionRole(
-                id: 'r-poow', stationId: 'poow', name: 'POOW', rotating: true),
-          ],
-        );
+      id: 'ev',
+      name: 'In-Port Duty',
+      shifts: [
+        WatchShift(id: 's1', label: '1', start: '0630', end: '1130'),
+        WatchShift(id: 's2', label: '2', start: '1130', end: '1630'),
+      ],
+      roles: [
+        EvolutionRole(
+          id: 'r-cdo',
+          stationId: 'cdo',
+          name: 'CDO',
+          rotating: false,
+        ),
+        EvolutionRole(
+          id: 'r-poow',
+          stationId: 'poow',
+          name: 'POOW',
+          rotating: true,
+        ),
+      ],
+    );
 
     test('evolutionSlots: standing -> 1 slot, rotating -> one per shift', () {
       final slots = evolutionSlots(ev());
@@ -133,14 +195,16 @@ void main() {
 
     test('BillEntry id keyed by day/evolution/role/shift', () {
       final day = DateTime(2026, 6, 21, 14).millisecondsSinceEpoch;
-      expect(BillEntry.makeId(day, 'ev', 'r-poow', 's1'),
-          '${startOfDay(day)}|ev|r-poow|s1');
+      expect(
+        BillEntry.makeId(day, 'ev', 'r-poow', 's1'),
+        '${startOfDay(day)}|ev|r-poow|s1',
+      );
     });
 
     test('auto-fill uses only qualified people', () {
       final quals = {
         'a': {'cdo'},
-        'b': {'poow'}
+        'b': {'poow'},
       };
       final fill = autoFillBill(
         slots: evolutionSlots(ev()),
@@ -151,31 +215,35 @@ void main() {
       expect(fill['r-poow|s1'], 'b');
     });
 
-    test('a standing watch makes a person unavailable for any rotating shift',
-        () {
-      // p is the only person and is qualified for everything; takes CDO
-      // (standing, filled first) -> then can't take POOW shifts.
-      final fill = autoFillBill(
-        slots: evolutionSlots(ev()),
-        people: ['p'],
-        isQualified: (_, __) => true,
-      );
-      expect(fill['r-cdo|'], 'p');
-      expect(fill.containsKey('r-poow|s1'), isFalse);
-    });
+    test(
+      'a standing watch makes a person unavailable for any rotating shift',
+      () {
+        // p is the only person and is qualified for everything; takes CDO
+        // (standing, filled first) -> then can't take POOW shifts.
+        final fill = autoFillBill(
+          slots: evolutionSlots(ev()),
+          people: ['p'],
+          isQualified: (_, __) => true,
+        );
+        expect(fill['r-cdo|'], 'p');
+        expect(fill.containsKey('r-poow|s1'), isFalse);
+      },
+    );
 
-    test('even load spreads rotating shifts across equally-qualified people',
-        () {
-      final fill = autoFillBill(
-        slots: evolutionSlots(ev()),
-        people: ['a', 'b'],
-        isQualified: (p, st) => st == 'poow', // both qualified for POOW only
-      );
-      // CDO unfillable (nobody qualified); the two POOW shifts go to different
-      // people rather than doubling one up.
-      expect(fill.containsKey('r-cdo|'), isFalse);
-      expect({fill['r-poow|s1'], fill['r-poow|s2']}, {'a', 'b'});
-    });
+    test(
+      'even load spreads rotating shifts across equally-qualified people',
+      () {
+        final fill = autoFillBill(
+          slots: evolutionSlots(ev()),
+          people: ['a', 'b'],
+          isQualified: (p, st) => st == 'poow', // both qualified for POOW only
+        );
+        // CDO unfillable (nobody qualified); the two POOW shifts go to different
+        // people rather than doubling one up.
+        expect(fill.containsKey('r-cdo|'), isFalse);
+        expect({fill['r-poow|s1'], fill['r-poow|s2']}, {'a', 'b'});
+      },
+    );
   });
 
   group('duty sections', () {
@@ -186,33 +254,68 @@ void main() {
 
     test('partitions everyone into balanced fifths', () {
       final a = assignDutySections(
-          people: people,
-          requiredStations: ['A', 'B'],
-          isQualified: qual,
-          sections: 5);
+        people: people,
+        requiredStations: ['A', 'B'],
+        isQualified: qual,
+        sections: 5,
+      );
       expect(a.length, 10);
       expect(a.values.every((s) => s >= 1 && s <= 5), isTrue);
-      final sizes =
-          [for (var s = 1; s <= 5; s++) a.values.where((v) => v == s).length];
+      final sizes = [
+        for (var s = 1; s <= 5; s++) a.values.where((v) => v == s).length,
+      ];
       expect(sizes.reduce((x, y) => x + y), 10);
       expect(sizes.reduce((x, y) => x > y ? x : y), 2, reason: 'even fifths');
     });
 
     test('spreads the scarce station, covers the common one everywhere', () {
       final a = assignDutySections(
-          people: people, requiredStations: ['A', 'B'], isQualified: qual);
+        people: people,
+        requiredStations: ['A', 'B'],
+        isQualified: qual,
+      );
       final gaps = dutySectionGaps(
-          assignment: a, requiredStations: ['A', 'B'], isQualified: qual);
+        assignment: a,
+        requiredStations: ['A', 'B'],
+        isQualified: qual,
+      );
       expect(gaps.values.any((m) => m.contains('A')), isFalse);
       expect(a['p1'] != a['p2'], isTrue);
     });
 
     test('flags coverage gaps when too few are qualified', () {
       final a = assignDutySections(
-          people: people, requiredStations: ['A', 'B'], isQualified: qual);
+        people: people,
+        requiredStations: ['A', 'B'],
+        isQualified: qual,
+      );
       final gaps = dutySectionGaps(
-          assignment: a, requiredStations: ['A', 'B'], isQualified: qual);
+        assignment: a,
+        requiredStations: ['A', 'B'],
+        isQualified: qual,
+      );
       expect(gaps.values.where((m) => m.contains('B')).length, 3);
+    });
+  });
+
+  group('watch-stood log', () {
+    test('round-trips and keys by the bill slot', () {
+      final day = DateTime(2026, 6, 24, 14).millisecondsSinceEpoch;
+      final w = WatchStood(
+        id: WatchStood.makeId(day, 'ev-inport', 'r-oodip', 's4'),
+        personId: 'acct-7',
+        stationName: 'Officer of the Deck (In-Port)',
+        evolutionName: 'In-Port Duty',
+        timeLabel: '2130-0130',
+        dayMs: startOfDay(day),
+        atMs: 1000,
+      );
+      expect(w.id, '${startOfDay(day)}|ev-inport|r-oodip|s4');
+      final back = WatchStood.fromJson(w.toJson());
+      expect(back.personId, 'acct-7');
+      expect(back.stationName, 'Officer of the Deck (In-Port)');
+      expect(back.timeLabel, '2130-0130');
+      expect(back.atMs, 1000);
     });
   });
 }

@@ -8,21 +8,31 @@ import 'package:grapheion/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('a fresh launch shows the start screen (scanner-first)',
-      (tester) async {
-    SharedPreferences.setMockInitialValues({}); // no formation key -> start screen
+  testWidgets('a fresh launch shows the start screen (scanner-first)', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(
+      {},
+    ); // no formation key -> start screen
     await tester.pumpWidget(const GrapheionApp());
     await tester.pump(); // let _restoreIdentity's async settle (no node starts)
 
     expect(find.text('Grapheion'), findsWidgets);
-    expect(find.text('Scan join QR'), findsOneWidget,
-        reason: 'entry leads with the scanner');
-    expect(find.text('Set up a new mesh instead'), findsOneWidget,
-        reason: 'host option is the secondary action');
+    expect(
+      find.text('Scan join QR'),
+      findsOneWidget,
+      reason: 'entry leads with the scanner',
+    );
+    expect(
+      find.text('Set up a new mesh instead'),
+      findsOneWidget,
+      reason: 'host option is the secondary action',
+    );
   });
 
-  testWidgets('the theme toggle button is present on the start screen',
-      (tester) async {
+  testWidgets('the theme toggle button is present on the start screen', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(const GrapheionApp());
     await tester.pump();

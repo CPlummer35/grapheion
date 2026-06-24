@@ -34,6 +34,7 @@ const kQuals = 'quals'; // PQS progress (person x qualification)
 const kEvolutions = 'evolutions'; // evolutions (role sets, e.g. In-Port Duty)
 const kBill = 'watchbill'; // bill entries (day x evolution x role x shift)
 const kBulletin = 'bulletin'; // duty-section bulletin posts
+const kStood = 'stood'; // append-only watch-stood log
 const kFeedback =
     'feedback'; // demo feedback (anyone writes, only Kratos reads)
 
@@ -69,6 +70,7 @@ class MeshStore {
   final Map<String, Evolution> evolutions = {};
   final Map<String, BillEntry> bill = {}; // keyed by BillEntry.makeId
   final Map<String, BulletinPost> bulletin = {};
+  final Map<String, WatchStood> stood = {};
   final Map<String, FeedbackNote> feedback = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
@@ -162,6 +164,10 @@ class MeshStore {
         } else {
           bulletin[docId] = p;
         }
+      } else if (coll == kStood) {
+        final w = WatchStood.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final old = stood[docId];
+        if (old == null || w.atMs >= old.atMs) stood[docId] = w; // LWW
       } else if (coll == kFeedback) {
         final note = FeedbackNote.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
@@ -400,6 +406,7 @@ class MeshStore {
     evolutions.clear();
     bill.clear();
     bulletin.clear();
+    stood.clear();
     feedback.clear();
     org.departments.clear();
     org.divisions.clear();

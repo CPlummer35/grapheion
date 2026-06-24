@@ -492,3 +492,57 @@ Map<int, List<String>> dutySectionGaps({
   }
   return gaps;
 }
+
+// --- Watch-stood log ------------------------------------------------------
+//
+// An append-only record of watches actually STOOD — the permanent history,
+// independent of the (mutable) bill. Keyed by the bill slot so re-recording a
+// duty day updates rather than duplicates; carries name snapshots so counts
+// survive a station/evolution being renamed or removed.
+
+class WatchStood {
+  final String id; // '{dayMs}|{evolutionId}|{roleId}|{shiftId}'
+  final String personId;
+  final String stationName; // snapshot
+  final String evolutionName; // snapshot
+  final String timeLabel; // '2130-0130', or '' for a standing watch
+  final int dayMs;
+  int atMs; // recorded-at (last-write-wins)
+
+  WatchStood({
+    required this.id,
+    required this.personId,
+    required this.stationName,
+    required this.evolutionName,
+    required this.timeLabel,
+    required this.dayMs,
+    required this.atMs,
+  });
+
+  static String makeId(
+    int dayMs,
+    String evolutionId,
+    String roleId,
+    String shiftId,
+  ) => '${startOfDay(dayMs)}|$evolutionId|$roleId|$shiftId';
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'personId': personId,
+    'stationName': stationName,
+    'evolutionName': evolutionName,
+    'timeLabel': timeLabel,
+    'dayMs': dayMs,
+    'atMs': atMs,
+  };
+
+  factory WatchStood.fromJson(Map<String, dynamic> j) => WatchStood(
+    id: j['id'] as String,
+    personId: (j['personId'] ?? '') as String,
+    stationName: (j['stationName'] ?? '') as String,
+    evolutionName: (j['evolutionName'] ?? '') as String,
+    timeLabel: (j['timeLabel'] ?? '') as String,
+    dayMs: (j['dayMs'] ?? 0) as int,
+    atMs: (j['atMs'] ?? 0) as int,
+  );
+}

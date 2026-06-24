@@ -24,11 +24,12 @@ void main() {
 
   bool sees(Role role, String viewerWc, String jobWc, {bool ta = false}) =>
       canSeeJob(
-          role: role,
-          viewerWorkcenterId: viewerWc,
-          jobWorkcenterId: jobWc,
-          jobHasTa: ta,
-          org: org);
+        role: role,
+        viewerWorkcenterId: viewerWc,
+        jobWorkcenterId: jobWc,
+        jobHasTa: ta,
+        org: org,
+      );
 
   group('scopeForRole', () {
     test('maps each role to the right scope', () {
@@ -57,21 +58,32 @@ void main() {
   group('canSeeJob', () {
     test('WCS sees only their own work center', () {
       expect(sees(Role.wcs, 'CP01', 'CP01'), isTrue);
-      expect(sees(Role.wcs, 'CP01', 'CP02'), isFalse, reason: 'same div, diff WC');
+      expect(
+        sees(Role.wcs, 'CP01', 'CP02'),
+        isFalse,
+        reason: 'same div, diff WC',
+      );
       expect(sees(Role.wcs, 'CP01', 'EA01'), isFalse);
     });
 
     test('DIVO/LPO see every work center in their division', () {
       expect(sees(Role.divo, 'CP01', 'CP01'), isTrue);
-      expect(sees(Role.divo, 'CP01', 'CP02'), isTrue, reason: 'both M Division');
+      expect(
+        sees(Role.divo, 'CP01', 'CP02'),
+        isTrue,
+        reason: 'both M Division',
+      );
       expect(sees(Role.divo, 'CP01', 'EA01'), isFalse, reason: 'A Division');
       expect(sees(Role.lpo, 'CP02', 'CP01'), isTrue);
     });
 
     test('DH sees the whole department (all divisions)', () {
       expect(sees(Role.dh, 'CP01', 'CP01'), isTrue);
-      expect(sees(Role.dh, 'CP01', 'EA01'), isTrue,
-          reason: 'M and A are both Engineering');
+      expect(
+        sees(Role.dh, 'CP01', 'EA01'),
+        isTrue,
+        reason: 'M and A are both Engineering',
+      );
     });
 
     test('3-M Coordinator sees the whole ship', () {

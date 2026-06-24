@@ -15,7 +15,11 @@ void main() {
       context: 'SKED',
       messages: [
         FeedbackMessage(fromOwner: false, text: 'SKED is slick', atMs: 100),
-        FeedbackMessage(fromOwner: true, text: 'Thanks — glad it lands', atMs: 200),
+        FeedbackMessage(
+          fromOwner: true,
+          text: 'Thanks — glad it lands',
+          atMs: 200,
+        ),
         FeedbackMessage(fromOwner: false, text: 'one nit though…', atMs: 300),
       ],
       readByOwner: false,
