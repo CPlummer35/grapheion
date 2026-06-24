@@ -1165,6 +1165,40 @@ class _HomePageState extends State<HomePage> {
           null, []),
       ('q-dutyeng', 'DUTYENG', 'Duty Engineer', QualType.watchStation, true,
           null, []),
+      ('q-sectionldr', 'SEC LDR', 'Duty Section Leader', QualType.watchStation,
+          true, null, []),
+      ('q-attwo', 'AT/TWO', 'Anti-Terrorism / Tactical Watch Officer',
+          QualType.watchStation, true, null, []),
+      ('q-csoow', 'CSOOW', 'Combat Systems Officer of the Watch',
+          QualType.watchStation, true, null, []),
+      ('q-firemarshal', 'FIRE MAR', 'In-Port Fire Marshal',
+          QualType.watchStation, true, null, []),
+      ('q-dutymaa', 'DMAA', 'Duty Master-at-Arms', QualType.watchStation, true,
+          null, []),
+      ('q-rfl', 'RF LDR', 'Reaction Force Leader', QualType.watchStation, true,
+          null, []),
+      ('q-rfm', 'RF MBR', 'Reaction Force Member', QualType.watchStation, true,
+          null, []),
+      ('q-sentry', 'SENTRY', 'Armed Sentry (ECP)', QualType.watchStation, true,
+          null, []),
+      ('q-topside', 'TOPSIDE', 'Topside Rover', QualType.watchStation, true,
+          null, []),
+      ('q-firewatch', 'FIRE WCH', 'Fire Watch Stander', QualType.watchStation,
+          true, null, []),
+      ('q-coldiron', 'COLD IRON', 'Cold Iron Engineering Watch',
+          QualType.watchStation, true, null, []),
+      ('q-eqmon', 'EQ MON', 'In-Port Equipment Monitor', QualType.watchStation,
+          true, null, []),
+      ('q-iet-tl', 'IET-TL', 'In-Port Emergency Team Leader',
+          QualType.watchStation, true, null, []),
+      ('q-iet-scene', 'IET-SCN', 'IET Scene Leader', QualType.watchStation,
+          true, null, []),
+      ('q-iet-nozzle', 'IET-NOZ', 'IET Nozzleman', QualType.watchStation, true,
+          null, []),
+      ('q-iet-hose', 'IET-HOSE', 'IET Hoseman', QualType.watchStation, true,
+          null, []),
+      ('q-iet-invest', 'IET-INV', 'IET Investigator', QualType.watchStation,
+          true, null, []),
       // Underway watch stations (SWO prereqs; not on the in-port bill)
       ('q-ooduw', 'OOD U/W', 'Officer of the Deck (Underway)',
           QualType.watchStation, false, 100, []),
@@ -1258,28 +1292,40 @@ class _HomePageState extends State<HomePage> {
   /// for showing people. Stable ids, so re-running just refreshes them.
   void _seedDemoCrew() {
     _ensureCanonicalOrg(); // guarantee the departments/divisions exist first
-    // rate, name, role, division id, [station qualifications they hold]
-    final crew = <(String, String, Role, String, List<String>)>[
-      ('LCDR', 'Reyes', Role.dh, 'EM', ['q-cdo', 'q-oodip']),
-      ('LT', 'Donnelly', Role.divo, 'CA', ['q-cdo', 'q-oodip', 'q-dutyeng']),
-      ('LTJG', 'Park', Role.divo, 'OI', ['q-oodip', 'q-dutyeng']),
-      ('CWO3', 'Bauer', Role.divo, 'EA', ['q-dutyeng', 'q-cdo']),
-      ('ENS', 'Carter', Role.divo, '1ST', ['q-oodip']),
-      ('GSCS', 'Nakamura', Role.lpo, 'EM', ['q-dutyeng', 'q-poow', 'q-sns']),
-      ('BM1', 'Flores', Role.wcs, '1ST', ['q-poow', 'q-sns', 'q-sec']),
-      ('OS1', 'Patel', Role.wcs, 'OI', ['q-poow', 'q-sec', 'q-moow']),
-      ('GM2', 'Sullivan', Role.technician, 'GUN',
-          ['q-poow', 'q-sns', 'q-sec', 'q-moow']),
-      ('ET2', 'Brooks', Role.technician, 'CE', ['q-poow', 'q-sec']),
-      ('MM2', 'Iverson', Role.technician, 'EA', ['q-poow', 'q-sns', 'q-sec']),
-      ('OS2', 'Dunn', Role.technician, 'OI', ['q-poow', 'q-sns', 'q-moow']),
-      ('BM3', 'Davis', Role.technician, '1ST', ['q-moow', 'q-sns', 'q-sec']),
-      ('OS3', 'Nguyen', Role.technician, 'OI', ['q-moow', 'q-sns', 'q-sec']),
-      ('FN', 'Castillo', Role.technician, 'EM', ['q-moow', 'q-sns']),
-      ('SN', 'Whitaker', Role.technician, '1ST', ['q-moow', 'q-sns']),
-      ('GSMFN', 'Abara', Role.technician, 'EM', ['q-moow', 'q-sns', 'q-sec']),
-      ('SA', 'Rhodes', Role.technician, '1ST', ['q-moow']),
+    // rate, name, role, division id
+    final crew = <(String, String, Role, String)>[
+      ('LCDR', 'Reyes', Role.dh, 'EM'),
+      ('LT', 'Donnelly', Role.divo, 'CA'),
+      ('LTJG', 'Park', Role.divo, 'OI'),
+      ('CWO3', 'Bauer', Role.divo, 'EA'),
+      ('ENS', 'Carter', Role.divo, '1ST'),
+      ('GSCS', 'Nakamura', Role.lpo, 'EM'),
+      ('BM1', 'Flores', Role.wcs, '1ST'),
+      ('OS1', 'Patel', Role.wcs, 'OI'),
+      ('GM2', 'Sullivan', Role.technician, 'GUN'),
+      ('ET2', 'Brooks', Role.technician, 'CE'),
+      ('MM2', 'Iverson', Role.technician, 'EA'),
+      ('OS2', 'Dunn', Role.technician, 'OI'),
+      ('BM3', 'Davis', Role.technician, '1ST'),
+      ('OS3', 'Nguyen', Role.technician, 'OI'),
+      ('FN', 'Castillo', Role.technician, 'EM'),
+      ('SN', 'Whitaker', Role.technician, '1ST'),
+      ('GSMFN', 'Abara', Role.technician, 'EM'),
+      ('SA', 'Rhodes', Role.technician, '1ST'),
     ];
+    // Quals by seniority tier, so any bill the user builds can be auto-filled.
+    const baseStations = [ // everyone holds these (the rotating / junior watches)
+      'q-poow', 'q-moow', 'q-sns', 'q-sec', 'q-topside', 'q-firewatch',
+      'q-eqmon', 'q-sentry', 'q-rfm', 'q-iet-hose', 'q-iet-nozzle', 'q-coldiron',
+    ];
+    const seniorStations = [ // officers + senior enlisted add the command watches
+      'q-cdo', 'q-oodip', 'q-csoow', 'q-attwo', 'q-dutyeng', 'q-sectionldr',
+      'q-firemarshal', 'q-dutymaa', 'q-rfl', 'q-iet-tl', 'q-iet-scene',
+      'q-iet-invest',
+    ];
+    const seniorRoles = {
+      Role.lpo, Role.wcs, Role.dh, Role.divo, Role.threeMC
+    };
     const salt = 'grapheion-demo-crew';
     final now = DateTime.now().millisecondsSinceEpoch;
     for (var i = 0; i < crew.length; i++) {
@@ -1300,7 +1346,8 @@ class _HomePageState extends State<HomePage> {
       final json = jsonEncode(a.toJson());
       _node!.putRaw(kAccounts, id, json);
       _bleBroadcast(kAccounts, id, json);
-      for (final st in c.$5) {
+      final senior = _isOfficer(a) || seniorRoles.contains(a.role);
+      for (final st in [...baseStations, if (senior) ...seniorStations]) {
         _setQual(id, st, QualStage.qualified);
       }
     }
