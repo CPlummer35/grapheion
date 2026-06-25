@@ -2286,10 +2286,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     if (!forCdo)
                       SizedBox(
                         width: double.infinity,
-                        child: FilledButton.icon(
-                          icon: const Icon(Icons.send),
-                          label: const Text('Submit to CDO'),
-                          onPressed: () {
+                        child: _ConfirmButton(
+                          label: 'Submit to CDO',
+                          confirmLabel: 'Tap to confirm',
+                          icon: Icons.send,
+                          onConfirm: () {
                             _submitFinalize(section);
                             Navigator.pop(ctx);
                           },
@@ -2390,10 +2391,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
         if (_canSubmitBill(section)) {
           actions.add(
-            FilledButton.icon(
-              onPressed: () => _submitBill(section),
-              icon: const Icon(Icons.send, size: 18),
-              label: const Text('Submit to CDO'),
+            _ConfirmButton(
+              label: 'Submit to CDO',
+              confirmLabel: 'Tap to confirm',
+              icon: Icons.send,
+              onConfirm: () => _submitBill(section),
             ),
           );
         }
@@ -7379,6 +7381,63 @@ class _AccountFormState extends State<_AccountForm> {
 
 /// A peer seen on the mesh, from its presence beat.
 // Peer model lives in mesh_store.dart.
+
+/// A two-tap action button: the first tap arms it (label/color change to a
+/// confirm state), the second tap fires [onConfirm]. Auto-disarms after a few
+/// seconds so a stray first tap doesn't stay armed. Used for important sends
+/// like submitting a watchbill to the CDO.
+class _ConfirmButton extends StatefulWidget {
+  const _ConfirmButton({
+    required this.label,
+    required this.confirmLabel,
+    required this.icon,
+    required this.onConfirm,
+  });
+
+  final String label;
+  final String confirmLabel;
+  final IconData icon;
+  final VoidCallback onConfirm;
+
+  @override
+  State<_ConfirmButton> createState() => _ConfirmButtonState();
+}
+
+class _ConfirmButtonState extends State<_ConfirmButton> {
+  bool _armed = false;
+  Timer? _reset;
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.icon(
+      icon: Icon(_armed ? Icons.check_circle : widget.icon, size: 18),
+      label: Text(_armed ? widget.confirmLabel : widget.label),
+      style: _armed
+          ? FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            )
+          : null,
+      onPressed: () {
+        if (_armed) {
+          _reset?.cancel();
+          setState(() => _armed = false);
+          widget.onConfirm();
+        } else {
+          setState(() => _armed = true);
+          _reset = Timer(const Duration(seconds: 4), () {
+            if (mounted) setState(() => _armed = false);
+          });
+        }
+      },
+    );
+  }
+}
 
 class _Badge extends StatelessWidget {
   const _Badge(this.text, {this.off = false, this.color});

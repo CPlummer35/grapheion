@@ -196,6 +196,7 @@ class MeshStore {
         final old = routing[docId];
         if (old == null || r.updatedAtMs >= old.updatedAtMs) {
           routing[docId] = r; // LWW — a stale rebroadcast can't revert status
+          if (remote) _notifyForRouting(old, r, peer);
         }
       } else if (coll == kFeedback) {
         final note = FeedbackNote.fromJson(
@@ -455,6 +456,75 @@ class MeshStore {
       } else if (job.phase != old.phase || job.approver != old.approver) {
         onNotify(title, 'approved → ${stageText(job)}', peer);
       }
+    }
+  }
+
+  /// Watchbill routing pings (each device decides if it's the target): the CDO
+  /// hears when a bill is submitted (plan or finalize); the whole section hears
+  /// when the plan is approved or the day is recorded; the Section Leader who
+  /// submitted hears when it's returned.
+  void _notifyForRouting(WatchbillRouting? old, WatchbillRouting r, String? peer) {
+    final me = account;
+    if (me == null) return;
+    // Only on a real transition (status or a fresh return).
+    if (old != null &&
+        old.status == r.status &&
+        old.returnedBy == r.returnedBy) {
+      return;
+    }
+    final section = r.section;
+    final inSection = me.dutySection == section;
+    final amCdo = inSection && me.dutyPosition == DutyPosition.cdo;
+    final amSl = inSection && me.dutyPosition == DutyPosition.sectionLeader;
+    final amSubmitter = r.submittedBy.isNotEmpty && me.id == r.submittedBy;
+    final justReturned =
+        r.returnedBy.isNotEmpty && (old == null || old.returnedBy != r.returnedBy);
+
+    if (justReturned) {
+      if (amSubmitter || amSl) {
+        onNotify(
+          'Watchbill returned — Section $section',
+          r.returnedNote.isEmpty ? 'Returned by the CDO' : r.returnedNote,
+          peer,
+        );
+      }
+      return;
+    }
+    switch (r.status) {
+      case BillStatus.submitted:
+        if (amCdo) {
+          onNotify(
+            'Watchbill submitted — Section $section',
+            'Awaiting your CDO approval',
+            peer,
+          );
+        }
+      case BillStatus.finalizing:
+        if (amCdo) {
+          onNotify(
+            'Duty day finalize — Section $section',
+            'Awaiting your CDO approval',
+            peer,
+          );
+        }
+      case BillStatus.approved:
+        if (inSection) {
+          onNotify(
+            'Watchbill approved — Section $section',
+            'Plan approved by the CDO',
+            peer,
+          );
+        }
+      case BillStatus.finalized:
+        if (inSection) {
+          onNotify(
+            'Duty day recorded — Section $section',
+            'Finalized by the CDO — watch counts updated',
+            peer,
+          );
+        }
+      case BillStatus.draft:
+        break; // a fresh draft / new cycle is not an approval event
     }
   }
 

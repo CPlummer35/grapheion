@@ -375,4 +375,91 @@ void main() {
       expect(store.stoodForDay(100, '2').map((w) => w.personId), ['carol']);
     });
   });
+
+  group('applyDoc: watchbill routing notifications', () {
+    String routingJson(
+      String section,
+      BillStatus status, {
+      String submittedBy = '',
+      String returnedBy = '',
+      String note = '',
+    }) => jsonEncode(
+      WatchbillRouting(
+        id: WatchbillRouting.makeId(section),
+        section: section,
+        status: status,
+        submittedBy: submittedBy,
+        returnedBy: returnedBy,
+        returnedNote: note,
+        updatedAtMs: 1,
+      ).toJson(),
+    );
+
+    test('the CDO of the section is pinged on submit', () {
+      store.account = _acct('cdo', 'CDO', Role.lpo)
+        ..dutySection = '1'
+        ..dutyPosition = DutyPosition.cdo;
+      store.applyDoc(
+        kRouting,
+        '1',
+        routingJson('1', BillStatus.submitted, submittedBy: 'sl'),
+        remote: true,
+      );
+      expect(notes, isNotEmpty);
+    });
+
+    test('a plain watchstander is NOT pinged on submit', () {
+      store.account = _acct('ws', 'WS', Role.lpo)..dutySection = '1';
+      store.applyDoc(
+        kRouting,
+        '1',
+        routingJson('1', BillStatus.submitted, submittedBy: 'sl'),
+        remote: true,
+      );
+      expect(notes, isEmpty);
+    });
+
+    test('the section leader hears the return reason', () {
+      store.account = _acct('sl', 'SL', Role.lpo)
+        ..dutySection = '1'
+        ..dutyPosition = DutyPosition.sectionLeader;
+      store.applyDoc(
+        kRouting,
+        '1',
+        routingJson(
+          '1',
+          BillStatus.draft,
+          submittedBy: 'sl',
+          returnedBy: 'cdo',
+          note: 'fix the POOW',
+        ),
+        remote: true,
+      );
+      expect(notes.last, contains('fix the POOW'));
+    });
+
+    test('the whole section hears on approve', () {
+      store.account = _acct('m', 'M', Role.technician)..dutySection = '1';
+      store.applyDoc(
+        kRouting,
+        '1',
+        routingJson('1', BillStatus.approved),
+        remote: true,
+      );
+      expect(notes, isNotEmpty);
+    });
+
+    test('a local change does not notify', () {
+      store.account = _acct('cdo', 'CDO', Role.lpo)
+        ..dutySection = '1'
+        ..dutyPosition = DutyPosition.cdo;
+      store.applyDoc(
+        kRouting,
+        '1',
+        routingJson('1', BillStatus.submitted, submittedBy: 'sl'),
+        remote: false,
+      );
+      expect(notes, isEmpty);
+    });
+  });
 }
