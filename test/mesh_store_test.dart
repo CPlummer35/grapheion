@@ -499,4 +499,53 @@ void main() {
       expect(ok, 0);
     });
   });
+
+  group('spot-check (pmsDone)', () {
+    PmsCheck chk() => PmsCheck(
+      id: 'c',
+      mip: 'M',
+      seq: 1,
+      title: 'Chain',
+      ein: '',
+      workcenter: 'CP01',
+      periodicity: Periodicity.weekly,
+      estMinutes: 0,
+      lastDoneMs: null,
+      lastBy: '',
+      createdAtMs: 0,
+      updatedAtMs: 0,
+    );
+
+    test('awaiting accomplishments surface; verified ones drop off', () {
+      store.pmsChecks['c'] = chk();
+      final a = PmsAccomplishment(
+        id: 'c|0',
+        checkId: 'c',
+        dayMs: 0,
+        by: 'tech',
+        atMs: 1,
+        updatedAtMs: 1,
+      );
+      store.pmsDone[a.id] = a;
+      expect(store.pendingVerifications().length, 1);
+      a.verifiedBy = 'WCS';
+      expect(store.pendingVerifications(), isEmpty);
+    });
+
+    test('the performer is pinged when their check is kicked back', () {
+      store.account = _acct('tech', 'Tech', Role.technician);
+      store.pmsChecks['c'] = chk();
+      final a = PmsAccomplishment(
+        id: 'c|0',
+        checkId: 'c',
+        dayMs: 0,
+        by: 'Tech',
+        atMs: 1,
+        reworkNote: 'redo it',
+        updatedAtMs: 1,
+      );
+      store.applyDoc(kPmsDone, a.id, jsonEncode(a.toJson()), remote: true);
+      expect(notes.last, contains('redo it'));
+    });
+  });
 }

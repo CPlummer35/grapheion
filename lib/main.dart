@@ -3032,6 +3032,292 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  void _verifyAccomplishment(PmsAccomplishment a) {
+    a.verifiedBy = _name;
+    a.verifiedAtMs = DateTime.now().millisecondsSinceEpoch;
+    a.reworkNote = '';
+    _saveAccomplishment(a);
+  }
+
+  void _kickBackAccomplishment(PmsAccomplishment a, String note) {
+    a.reworkNote = note;
+    a.verifiedBy = '';
+    a.verifiedAtMs = 0;
+    _saveAccomplishment(a);
+  }
+
+  void _deferCheck(PmsCheck c, String reason, int untilMs) {
+    c.defer(reason, untilMs, DateTime.now().millisecondsSinceEpoch);
+    _savePmsCheck(c);
+  }
+
+  void _clearDeferral(PmsCheck c) {
+    c.clearDeferral(DateTime.now().millisecondsSinceEpoch);
+    _savePmsCheck(c);
+  }
+
+  /// The WCS/supervisor spot-check queue: signed accomplishments awaiting
+  /// verification, each shown with its step results, verify or kick-back.
+  void _openSpotChecks() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          final pending = _store.pendingVerifications();
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Spot checks',
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${pending.length} signed check(s) awaiting verification',
+                    style: const TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  if (pending.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'Nothing pending — all signed work is verified.',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final a in pending) _spotCheckCard(setS, ctx, a),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _spotCheckCard(StateSetter setS, BuildContext sheetCtx, PmsAccomplishment a) {
+    final c = _store.pmsChecks[a.checkId];
+    final label = c == null
+        ? a.checkId
+        : (c.title.isEmpty ? '${c.mip} ${c.mrcCode}' : c.title);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+            Text(
+              'signed by ${a.by}'
+              '${a.hasDiscrepancy ? ' · discrepancy' : ''}',
+              style: TextStyle(
+                color: a.hasDiscrepancy ? _duOrange : Colors.grey,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 6),
+            if (c != null)
+              for (final s in c.steps)
+                Builder(
+                  builder: (_) {
+                    StepResult? r;
+                    for (final x in a.results) {
+                      if (x.stepId == s.id) r = x;
+                    }
+                    final ok = r?.sat ?? true;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            ok ? Icons.check : Icons.close,
+                            size: 15,
+                            color: ok ? Colors.green : _duOrange,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '${s.text}'
+                              '${(r?.reading ?? '').isEmpty ? '' : ' — ${r!.reading}'}',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+            if (a.note.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Remarks: ${a.note}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                FilledButton.icon(
+                  onPressed: () {
+                    _verifyAccomplishment(a);
+                    setS(() {});
+                  },
+                  icon: const Icon(Icons.verified, size: 18),
+                  label: const Text('Verify'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _promptKickBack(sheetCtx, a, setS),
+                  icon: const Icon(Icons.undo, size: 18),
+                  label: const Text('Kick back'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _promptKickBack(
+    BuildContext sheetCtx,
+    PmsAccomplishment a,
+    StateSetter setS,
+  ) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: sheetCtx,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Kick back for rework'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Reason',
+            hintText: 'e.g. chain not wiped before lube',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _kickBackAccomplishment(a, ctrl.text.trim());
+              setS(() {});
+            },
+            child: const Text('Kick back'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _deferSection(BuildContext sheetCtx, PmsCheck check) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (check.deferredAt(now)) {
+      return ListTile(
+        leading: const Icon(Icons.pause_circle_outline, color: Colors.orange),
+        title: Text('Deferred: ${check.deferReason}'),
+        subtitle: Text('until ${_shortDate(check.deferredUntilMs!)}'),
+        trailing: TextButton(
+          onPressed: () {
+            _clearDeferral(check);
+            Navigator.pop(sheetCtx);
+          },
+          child: const Text('Clear'),
+        ),
+      );
+    }
+    return ListTile(
+      leading: const Icon(Icons.pause_circle_outline),
+      title: const Text('Defer this check'),
+      subtitle: const Text('parts / ops / access — masks overdue with a reason'),
+      onTap: () => _promptDefer(sheetCtx, check),
+    );
+  }
+
+  void _promptDefer(BuildContext sheetCtx, PmsCheck check) {
+    const reasons = ['Awaiting parts', 'Operational', 'No access', 'Other'];
+    var reason = reasons.first;
+    var days = 7;
+    showDialog(
+      context: sheetCtx,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Defer check'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final r in reasons)
+                    ChoiceChip(
+                      label: Text(r),
+                      selected: reason == r,
+                      onSelected: (_) => setS(() => reason = r),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Text('Days: '),
+                  Expanded(
+                    child: Slider(
+                      value: days.toDouble(),
+                      min: 1,
+                      max: 30,
+                      divisions: 29,
+                      label: '$days',
+                      onChanged: (v) => setS(() => days = v.round()),
+                    ),
+                  ),
+                  Text('$days'),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final until =
+                    DateTime.now().millisecondsSinceEpoch + days * 86400000;
+                _deferCheck(check, reason, until);
+                Navigator.pop(ctx);
+                Navigator.pop(sheetCtx);
+              },
+              child: const Text('Defer'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Complete an MRC: walk its procedure steps, mark each SAT/UNSAT (with an
   /// optional reading), sign, and record a signed accomplishment for [forDayMs]
   /// (defaults to today). An UNSAT step offers to raise a corrective job.
@@ -5456,6 +5742,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     PmsStatus.overdue: _duOrange,
     PmsStatus.due: Colors.orange,
     PmsStatus.scheduled: Colors.green,
+    PmsStatus.deferred: Colors.blueGrey,
   };
 
   /// SKED — the weekly PMS schedule. The current Mon–Sun week as a board: an
@@ -5563,10 +5850,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  /// Spot-check state of the relevant accomplishment, for the tile subtitle.
+  String? _verifyTag(PmsCheck c, int? dayMs) {
+    final a = dayMs != null
+        ? _store.accomplishmentFor(c.id, dayMs)
+        : _store.latestAccomplishment(c.id);
+    if (a == null) return null;
+    if (a.kickedBack) return '↩ REWORK';
+    if (a.verified) return '✓ verified';
+    return 'awaiting spot-check';
+  }
+
   String _dueText(PmsCheck c, int nowMs) {
     if (!c.periodicity.isCalendar) return 'as required';
     final d = c.daysUntilDue(nowMs);
     switch (c.statusAt(nowMs)) {
+      case PmsStatus.deferred:
+        return 'DEFERRED: ${c.deferReason}';
       case PmsStatus.overdue:
         return 'OVERDUE ${-d}d';
       case PmsStatus.due:
@@ -5775,6 +6075,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final color = pct >= 90
         ? Colors.green
         : (pct >= 70 ? Colors.orange : _duOrange);
+    final pending = _store.pendingVerifications().length;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Column(
@@ -5805,11 +6106,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ],
           ),
           if (_canManageSked)
-            const Padding(
-              padding: EdgeInsets.only(top: 2),
-              child: Text(
-                'drag onto a day · tap to assign',
-                style: TextStyle(color: Colors.grey, fontSize: 11),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: _openSpotChecks,
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    icon: const Icon(Icons.fact_check_outlined, size: 16),
+                    label: Text(
+                      pending == 0 ? 'Spot checks' : 'Spot checks ($pending)',
+                    ),
+                  ),
+                  const Spacer(),
+                  const Text(
+                    'drag onto a day · tap to assign',
+                    style: TextStyle(color: Colors.grey, fontSize: 11),
+                  ),
+                ],
               ),
             ),
         ],
@@ -5964,6 +6281,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (check.ein.isNotEmpty) check.ein,
             _dueText(check, now),
             if (check.assignedTo.isNotEmpty) 'asgd: ${check.assignedTo}',
+            if (_verifyTag(check, dayMs) case final t?) t,
           ].join('  ·  '),
         ),
         trailing: FilledButton.tonal(
@@ -6111,6 +6429,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           Navigator.pop(ctx);
                         },
                       ),
+                  ],
+                  if (check != null) ...[
+                    const Divider(),
+                    _deferSection(ctx, check),
                   ],
                   const SizedBox(height: 12),
                 ],

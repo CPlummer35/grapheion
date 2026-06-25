@@ -154,6 +154,7 @@ class MeshStore {
         final old = pmsDone[docId];
         if (old == null || a.updatedAtMs >= old.updatedAtMs) {
           pmsDone[docId] = a; // LWW
+          if (remote) _notifyForPms(old, a, peer);
         }
       } else if (coll == kQualifications) {
         qualifications[docId] = Qualification.fromJson(
@@ -398,6 +399,52 @@ class MeshStore {
       if (best == null || a.atMs > best.atMs) best = a;
     }
     return best;
+  }
+
+  /// Signed accomplishments awaiting a supervisor spot-check, newest first;
+  /// scoped to checks the viewer can see (and optionally one [workcenter]).
+  List<PmsAccomplishment> pendingVerifications({String? workcenter}) {
+    final out = <PmsAccomplishment>[];
+    for (final a in pmsDone.values) {
+      if (!a.awaitingVerification) continue;
+      final c = pmsChecks[a.checkId];
+      if (c == null || !canSeeCheck(c)) continue;
+      if (workcenter != null && c.workcenter != workcenter) continue;
+      out.add(a);
+    }
+    out.sort((x, y) => y.atMs.compareTo(x.atMs));
+    return out;
+  }
+
+  /// Spot-check pings (each device decides if it's the target): the performer
+  /// hears when their work is verified or kicked back; a supervisor in the
+  /// check's work center hears when a fresh accomplishment needs spot-checking.
+  void _notifyForPms(PmsAccomplishment? old, PmsAccomplishment a, String? peer) {
+    if (account == null) return;
+    final c = pmsChecks[a.checkId];
+    final label = c == null
+        ? 'an MRC'
+        : (c.title.isEmpty ? '${c.mip} ${c.mrcCode}' : c.title);
+    if (a.by == name && a.by.isNotEmpty) {
+      if (a.verified && (old == null || !old.verified)) {
+        onNotify('PMS verified', '$label — spot-checked by ${a.verifiedBy}', peer);
+        return;
+      }
+      if (a.kickedBack && (old == null || old.reworkNote != a.reworkNote)) {
+        onNotify('PMS kicked back', '$label: ${a.reworkNote}', peer);
+        return;
+      }
+    }
+    if (old == null &&
+        a.awaitingVerification &&
+        a.by != name &&
+        c != null &&
+        workcenter == c.workcenter &&
+        role != null &&
+        role != Role.technician &&
+        role != Role.portEngineer) {
+      onNotify('PMS awaiting spot-check', '$label — signed by ${a.by}', peer);
+    }
   }
 
   /// PMS compliance at [nowMs]: of the calendar checks in scope, how many are

@@ -100,7 +100,7 @@ Periodicity periodicityFromToken(String s) => Periodicity.values.firstWhere(
 );
 
 /// Derived calendar state of a check at a given moment.
-enum PmsStatus { scheduled, due, overdue }
+enum PmsStatus { scheduled, due, overdue, deferred }
 
 /// One MRC (Maintenance Requirement Card) + its scheduling state.
 class PmsCheck {
@@ -118,6 +118,8 @@ class PmsCheck {
   String assignedTo; // person the WCS assigned ('' = unassigned)
   int? scheduledForMs; // WCS-assigned day (null = unplaced); daily = every day
   List<MrcStep> steps; // the MRC procedure (empty = a simple sign-off check)
+  int? deferredUntilMs; // deferred until this day (null = not deferred)
+  String deferReason; // why it was deferred (parts/ops/access/…)
   final int createdAtMs;
   int updatedAtMs;
 
@@ -136,6 +138,8 @@ class PmsCheck {
     this.assignedTo = '',
     this.scheduledForMs,
     List<MrcStep>? steps,
+    this.deferredUntilMs,
+    this.deferReason = '',
     required this.createdAtMs,
     required this.updatedAtMs,
   }) : doneDays = doneDays ?? [],
@@ -189,8 +193,27 @@ class PmsCheck {
   /// Whether it was accomplished on [dayMs]'s calendar day.
   bool doneOn(int dayMs) => doneDays.contains(startOfDay(dayMs));
 
-  /// Calendar state at [nowMs]. Situational checks have no due date.
+  /// Whether the check is currently deferred at [nowMs].
+  bool deferredAt(int nowMs) =>
+      deferredUntilMs != null && nowMs < deferredUntilMs!;
+
+  /// Defer the check until [untilMs] with a [reason]; clears with [clearDeferral].
+  void defer(String reason, int untilMs, int nowMs) {
+    deferReason = reason;
+    deferredUntilMs = untilMs;
+    updatedAtMs = nowMs;
+  }
+
+  void clearDeferral(int nowMs) {
+    deferReason = '';
+    deferredUntilMs = null;
+    updatedAtMs = nowMs;
+  }
+
+  /// Calendar state at [nowMs]. A deferral masks the due/overdue state until it
+  /// lapses; situational checks have no due date.
   PmsStatus statusAt(int nowMs) {
+    if (deferredAt(nowMs)) return PmsStatus.deferred;
     if (!periodicity.isCalendar) return PmsStatus.scheduled;
     final next = nextDueMs;
     if (nowMs > next) return PmsStatus.overdue;
@@ -217,6 +240,8 @@ class PmsCheck {
     'assignedTo': assignedTo,
     'scheduledForMs': scheduledForMs,
     'steps': steps.map((s) => s.toJson()).toList(),
+    'deferredUntilMs': deferredUntilMs,
+    'deferReason': deferReason,
     'createdAtMs': createdAtMs,
     'updatedAtMs': updatedAtMs,
   };
@@ -241,6 +266,8 @@ class PmsCheck {
     steps: (j['steps'] as List?)
         ?.map((e) => MrcStep.fromJson(e as Map<String, dynamic>))
         .toList(),
+    deferredUntilMs: j['deferredUntilMs'] as int?,
+    deferReason: (j['deferReason'] ?? '') as String,
     createdAtMs: (j['createdAtMs'] ?? 0) as int,
     updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
   );
@@ -296,6 +323,9 @@ class PmsAccomplishment {
   List<StepResult> results;
   String note; // overall remarks
   String jobId; // CSMP job spawned from a discrepancy ('' = none)
+  String verifiedBy; // WCS/supervisor who spot-checked + verified ('' = pending)
+  int verifiedAtMs;
+  String reworkNote; // kick-back reason ('' = not returned); non-empty = redo
   int updatedAtMs;
 
   PmsAccomplishment({
@@ -307,6 +337,9 @@ class PmsAccomplishment {
     List<StepResult>? results,
     this.note = '',
     this.jobId = '',
+    this.verifiedBy = '',
+    this.verifiedAtMs = 0,
+    this.reworkNote = '',
     required this.updatedAtMs,
   }) : results = results ?? [];
 
@@ -315,6 +348,12 @@ class PmsAccomplishment {
 
   /// Any UNSAT step → the accomplishment found a discrepancy.
   bool get hasDiscrepancy => results.any((r) => !r.sat);
+
+  /// Awaiting a supervisor spot-check (signed, not yet verified or kicked back).
+  bool get awaitingVerification => verifiedBy.isEmpty && reworkNote.isEmpty;
+
+  bool get verified => verifiedBy.isNotEmpty;
+  bool get kickedBack => reworkNote.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -325,6 +364,9 @@ class PmsAccomplishment {
     'results': results.map((r) => r.toJson()).toList(),
     'note': note,
     'jobId': jobId,
+    'verifiedBy': verifiedBy,
+    'verifiedAtMs': verifiedAtMs,
+    'reworkNote': reworkNote,
     'updatedAtMs': updatedAtMs,
   };
 
@@ -340,6 +382,9 @@ class PmsAccomplishment {
             .toList(),
         note: (j['note'] ?? '') as String,
         jobId: (j['jobId'] ?? '') as String,
+        verifiedBy: (j['verifiedBy'] ?? '') as String,
+        verifiedAtMs: (j['verifiedAtMs'] ?? 0) as int,
+        reworkNote: (j['reworkNote'] ?? '') as String,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
       );
 }

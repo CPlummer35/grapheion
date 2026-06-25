@@ -225,5 +225,61 @@ void main() {
       );
       expect(a.hasDiscrepancy, isFalse);
     });
+
+    test('spot-check state: awaiting → verified / kicked back, round-trips', () {
+      final a = PmsAccomplishment(
+        id: 'x',
+        checkId: 'c',
+        dayMs: 0,
+        by: 'tech',
+        atMs: 0,
+        updatedAtMs: 0,
+      );
+      expect(a.awaitingVerification, isTrue);
+      a
+        ..verifiedBy = 'WCS Jones'
+        ..verifiedAtMs = 5;
+      expect(a.verified, isTrue);
+      expect(a.awaitingVerification, isFalse);
+      final back = PmsAccomplishment.fromJson(a.toJson());
+      expect(back.verifiedBy, 'WCS Jones');
+      expect(back.verifiedAtMs, 5);
+
+      final k = PmsAccomplishment(
+        id: 'y',
+        checkId: 'c',
+        dayMs: 0,
+        by: 'tech',
+        atMs: 0,
+        reworkNote: 'redo it',
+        updatedAtMs: 0,
+      );
+      expect(k.kickedBack, isTrue);
+      expect(k.awaitingVerification, isFalse);
+      expect(PmsAccomplishment.fromJson(k.toJson()).reworkNote, 'redo it');
+    });
+  });
+
+  group('deferral', () {
+    test('a deferral masks the due state until it lapses, then clears', () {
+      final now = 100 * _day;
+      final c = _weekly(created: now - 30 * _day); // overdue weekly, never done
+      expect(c.statusAt(now), PmsStatus.overdue);
+      c.defer('Awaiting parts', now + 10 * _day, now);
+      expect(c.statusAt(now), PmsStatus.deferred);
+      expect(c.deferReason, 'Awaiting parts');
+      // once the deferral lapses the real (overdue) state returns
+      expect(c.statusAt(now + 11 * _day), PmsStatus.overdue);
+      c.clearDeferral(now);
+      expect(c.statusAt(now), PmsStatus.overdue);
+      expect(c.deferredUntilMs, isNull);
+    });
+
+    test('deferral round-trips', () {
+      final c = _weekly()..defer('No access', 5 * _day, 0);
+      final back = PmsCheck.fromJson(c.toJson());
+      expect(back.deferReason, 'No access');
+      expect(back.deferredUntilMs, 5 * _day);
+    });
   });
 }
