@@ -36,6 +36,7 @@ const kBill = 'watchbill'; // bill entries (day x evolution x role x shift)
 const kBulletin = 'bulletin'; // duty-section bulletin posts
 const kStood = 'stood'; // append-only watch-stood log
 const kEvents = 'events'; // duty-day events logged when a watchbill is recorded
+const kRouting = 'routing'; // watchbill approval chain — one per duty section
 const kFeedback =
     'feedback'; // demo feedback (anyone writes, only Kratos reads)
 
@@ -73,6 +74,7 @@ class MeshStore {
   final Map<String, BulletinPost> bulletin = {};
   final Map<String, WatchStood> stood = {};
   final Map<String, DutyDayEvent> dutyEvents = {};
+  final Map<String, WatchbillRouting> routing = {};
   final Map<String, FeedbackNote> feedback = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
@@ -187,6 +189,14 @@ class MeshStore {
           final old = dutyEvents[docId];
           if (old == null || ev.atMs >= old.atMs) dutyEvents[docId] = ev; // LWW
         }
+      } else if (coll == kRouting) {
+        final r = WatchbillRouting.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        final old = routing[docId];
+        if (old == null || r.updatedAtMs >= old.updatedAtMs) {
+          routing[docId] = r; // LWW — a stale rebroadcast can't revert status
+        }
       } else if (coll == kFeedback) {
         final note = FeedbackNote.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
@@ -230,6 +240,12 @@ class MeshStore {
   List<BulletinPost> bulletinForSection(String section) =>
       bulletin.values.where((p) => p.section == section).toList()
         ..sort((a, b) => a.atMs.compareTo(b.atMs));
+
+  /// The approval-chain status for a section's current watchbill — a fresh
+  /// Draft routing if none has been created yet.
+  WatchbillRouting routingFor(String section) =>
+      routing[WatchbillRouting.makeId(section)] ??
+      WatchbillRouting(id: WatchbillRouting.makeId(section), section: section);
 
   /// Duty-day events logged for one recorded day + section, type-sorted.
   /// [dayMs] is a normalized start-of-day (as stored on records).
@@ -456,6 +472,7 @@ class MeshStore {
     bulletin.clear();
     stood.clear();
     dutyEvents.clear();
+    routing.clear();
     feedback.clear();
     org.departments.clear();
     org.divisions.clear();

@@ -625,3 +625,82 @@ class DutyDayEvent {
     atMs: (j['atMs'] ?? 0) as int,
   );
 }
+
+// --- Watchbill routing (the approval chain) ------------------------------
+//
+// A section watchbill is built by the Section Leader, routed to the CDO, and
+// approved before the duty day; then FINALIZED (events logged) and approved a
+// second time — that second approval is what records the watches (counters +
+// history). One routing per section; everyone in the section sees the status.
+
+enum BillStatus {
+  draft, // SL building the plan (assignments editable)
+  submitted, // SL submitted the plan → awaiting CDO
+  approved, // CDO approved the plan; the duty day runs
+  finalizing, // SL submitted the finalize (events) → awaiting CDO
+  finalized, // CDO approved the finalize → watches recorded, in history
+}
+
+extension BillStatusInfo on BillStatus {
+  String get token => name;
+
+  /// SL may edit the bill assignments only while drafting.
+  bool get planEditable => this == BillStatus.draft;
+
+  /// Awaiting a CDO decision (the "in routing" states a watchstander sees).
+  bool get inRouting =>
+      this == BillStatus.submitted || this == BillStatus.finalizing;
+}
+
+BillStatus billStatusFromToken(String t) =>
+    BillStatus.values.firstWhere((s) => s.name == t, orElse: () => BillStatus.draft);
+
+class WatchbillRouting {
+  final String id; // == section (one routing per section)
+  final String section;
+  BillStatus status;
+  String submittedBy; // account id of the last submitter (Section Leader)
+  String approvedBy; // account id of the last approver (CDO)
+  String returnedBy; // account id of the CDO who returned it ('' = not returned)
+  String returnedNote; // CDO's reason for returning
+  int dayMs; // real calendar day being finalized (stamped at finalize-submit)
+  int updatedAtMs; // LWW + the timestamp shown in the status chip
+
+  WatchbillRouting({
+    required this.id,
+    required this.section,
+    this.status = BillStatus.draft,
+    this.submittedBy = '',
+    this.approvedBy = '',
+    this.returnedBy = '',
+    this.returnedNote = '',
+    this.dayMs = 0,
+    this.updatedAtMs = 0,
+  });
+
+  static String makeId(String section) => section;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'section': section,
+    'status': status.token,
+    'submittedBy': submittedBy,
+    'approvedBy': approvedBy,
+    'returnedBy': returnedBy,
+    'returnedNote': returnedNote,
+    'dayMs': dayMs,
+    'updatedAtMs': updatedAtMs,
+  };
+
+  factory WatchbillRouting.fromJson(Map<String, dynamic> j) => WatchbillRouting(
+    id: j['id'] as String,
+    section: (j['section'] ?? '') as String,
+    status: billStatusFromToken((j['status'] ?? 'draft') as String),
+    submittedBy: (j['submittedBy'] ?? '') as String,
+    approvedBy: (j['approvedBy'] ?? '') as String,
+    returnedBy: (j['returnedBy'] ?? '') as String,
+    returnedNote: (j['returnedNote'] ?? '') as String,
+    dayMs: (j['dayMs'] ?? 0) as int,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+  );
+}

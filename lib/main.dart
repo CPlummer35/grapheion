@@ -691,6 +691,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           for (final e in _store.dutyEvents.values) {
             _bleBroadcast(kEvents, e.id, jsonEncode(e.toJson()));
           }
+          for (final r in _store.routing.values) {
+            _bleBroadcast(kRouting, r.id, jsonEncode(r.toJson()));
+          }
           for (final f in _store.feedback.values) {
             _bleBroadcast(kFeedback, f.id, jsonEncode(f.toJson()));
           }
@@ -1149,6 +1152,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       kBulletin,
       kStood,
       kEvents,
+      kRouting,
       kFeedback,
     ]) {
       for (final id in node.listDocuments(coll)) {
@@ -2021,111 +2025,497 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _bleBroadcast(kEvents, e.id, json);
   }
 
+  // --- Watchbill approval chain --------------------------------------------
+
+  void _saveRouting(WatchbillRouting r) {
+    r.updatedAtMs = DateTime.now().millisecondsSinceEpoch; // newest wins on sync
+    final json = jsonEncode(r.toJson());
+    _store.routing[r.id] = r;
+    _node!.putRaw(kRouting, r.id, json);
+    _bleBroadcast(kRouting, r.id, json);
+    if (mounted) setState(() {});
+  }
+
+  bool _isSectionLeaderOf(String section) {
+    final a = _account;
+    return a != null &&
+        a.dutySection == section &&
+        a.dutyPosition == DutyPosition.sectionLeader;
+  }
+
+  bool _isCdoOf(String section) {
+    final a = _account;
+    return a != null &&
+        a.dutySection == section &&
+        a.dutyPosition == DutyPosition.cdo;
+  }
+
+  /// May submit (the plan, or the finalize): the Section Leader of the section,
+  /// or a ship-wide manager.
+  bool _canSubmitBill(String section) =>
+      _canManageSections || _isSectionLeaderOf(section);
+
+  /// May approve / return (the plan, or the finalize): the CDO, or a manager.
+  bool _canApproveBill(String section) =>
+      _canManageSections || _isCdoOf(section);
+
+  /// SL submits the built plan for the CDO's approval.
+  void _submitBill(String section) {
+    final r = _store.routingFor(section)
+      ..status = BillStatus.submitted
+      ..submittedBy = _account?.id ?? ''
+      ..returnedBy = ''
+      ..returnedNote = '';
+    _saveRouting(r);
+  }
+
+  /// CDO approves the plan — the duty day may now run.
+  void _approveBill(String section) {
+    final r = _store.routingFor(section)
+      ..status = BillStatus.approved
+      ..approvedBy = _account?.id ?? '';
+    _saveRouting(r);
+  }
+
+  /// CDO returns the plan to the SL with a reason; back to Draft.
+  void _returnBill(String section, String note) {
+    final r = _store.routingFor(section)
+      ..status = BillStatus.draft
+      ..returnedBy = _account?.id ?? ''
+      ..returnedNote = note;
+    _saveRouting(r);
+  }
+
+  /// SL submits the finalize (events already logged) for the day [r.dayMs].
+  void _submitFinalize(String section) {
+    final r = _store.routingFor(section)
+      ..status = BillStatus.finalizing
+      ..submittedBy = _account?.id ?? ''
+      ..dayMs = startOfDay(DateTime.now().millisecondsSinceEpoch)
+      ..returnedBy = ''
+      ..returnedNote = '';
+    _saveRouting(r);
+  }
+
+  /// CDO approves the finalize: records the watches (counters + history) and
+  /// marks the bill Finalized.
+  void _approveFinalize(Evolution ev, String section) {
+    final r = _store.routingFor(section);
+    final day = r.dayMs == 0
+        ? startOfDay(DateTime.now().millisecondsSinceEpoch)
+        : r.dayMs;
+    final n = _recordWatches(
+      ev,
+      _sectionDayMs(section),
+      recordDayMs: day,
+      section: section,
+      snack: false,
+    );
+    r
+      ..status = BillStatus.finalized
+      ..approvedBy = _account?.id ?? ''
+      ..dayMs = day;
+    _saveRouting(r);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Finalized — recorded $n watch${n == 1 ? '' : 'es'}')),
+      );
+    }
+  }
+
+  /// CDO returns the finalize to the SL; back to Approved.
+  void _returnFinalize(String section, String note) {
+    final r = _store.routingFor(section)
+      ..status = BillStatus.approved
+      ..returnedBy = _account?.id ?? ''
+      ..returnedNote = note;
+    _saveRouting(r);
+  }
+
+  /// Start the next duty day's bill from a Finalized one (SL): back to Draft.
+  void _newBillCycle(String section) {
+    final r = _store.routingFor(section)
+      ..status = BillStatus.draft
+      ..submittedBy = ''
+      ..approvedBy = ''
+      ..returnedBy = ''
+      ..returnedNote = '';
+    _saveRouting(r);
+  }
+
   /// Record a duty section's duty day: pick the events that occurred, then
   /// commit the watchbill (snapshotted to today's real date) + the events.
-  void _openRecordDutyDay(Evolution ev, String section) {
-    final selected = <String>{};
+  void _addDutyEvent(int day, String section, String type, String note) {
+    _saveDutyEvent(
+      DutyDayEvent(
+        id: DutyDayEvent.makeId(day, section, type),
+        dayMs: startOfDay(day),
+        section: section,
+        type: type,
+        note: note,
+        atMs: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  void _deleteDutyEvent(DutyDayEvent e) {
+    // Tombstone (empty type) so the delete syncs and survives a rebroadcast.
+    final tomb = DutyDayEvent(
+      id: e.id,
+      dayMs: e.dayMs,
+      section: e.section,
+      type: '',
+      note: '',
+      atMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    final json = jsonEncode(tomb.toJson());
+    _store.dutyEvents.remove(e.id);
+    _node!.putRaw(kEvents, e.id, json);
+    _bleBroadcast(kEvents, e.id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// The finalize sheet: log/adjust the events that occurred, then (SL) submit
+  /// to the CDO, or (CDO, [forCdo]) approve to record the day or return it.
+  /// Both the SL and the CDO may add/delete events here.
+  void _openFinalizeSheet(
+    Evolution ev,
+    String section, {
+    required bool forCdo,
+  }) {
+    final r = _store.routingFor(section);
+    final day = r.dayMs != 0
+        ? r.dayMs
+        : startOfDay(DateTime.now().millisecondsSinceEpoch);
+    var pickType = kDutyDayEventTypes.first;
     final noteCtrl = TextEditingController();
-    final today = DateTime.now().millisecondsSinceEpoch;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              16,
-              16,
-              16,
-              16 + MediaQuery.of(ctx).viewInsets.bottom,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Record Section $section duty day',
-                    style: Theme.of(ctx).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Log any notable events from the duty day, then confirm.',
-                    style: TextStyle(color: Colors.grey, fontSize: 13),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      for (final t in kDutyDayEventTypes)
-                        FilterChip(
-                          label: Text(t),
-                          selected: selected.contains(t),
-                          onSelected: (v) => setS(
-                            () => v ? selected.add(t) : selected.remove(t),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: noteCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Note (optional)',
-                      border: OutlineInputBorder(),
-                      hintText: 'Details / other events',
+        builder: (ctx, setS) {
+          final events = _store.eventsForDay(day, section);
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                16 + MediaQuery.of(ctx).viewInsets.bottom,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      forCdo
+                          ? 'Review Section $section duty day'
+                          : 'Finalize Section $section duty day',
+                      style: Theme.of(ctx).textTheme.titleMedium,
                     ),
-                    maxLines: 2,
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      icon: const Icon(Icons.check),
-                      label: const Text('Record duty day'),
+                    const SizedBox(height: 4),
+                    Text(
+                      forCdo
+                          ? 'Adjust the events if needed, then approve to record the watches, or return it to the section leader.'
+                          : 'Log the events that occurred, then submit to the CDO to record the day.',
+                      style: const TextStyle(color: Colors.grey, fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    if (events.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          'No events logged.',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    for (final e in events)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.warning_amber_rounded,
+                          size: 18,
+                          color: Colors.orange,
+                        ),
+                        title: Text(e.type),
+                        subtitle: e.note.isEmpty ? null : Text(e.note),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                          onPressed: () {
+                            _deleteDutyEvent(e);
+                            setS(() {});
+                          },
+                        ),
+                      ),
+                    const Divider(),
+                    DropdownButton<String>(
+                      value: pickType,
+                      isExpanded: true,
+                      items: [
+                        for (final t in kDutyDayEventTypes)
+                          DropdownMenuItem(value: t, child: Text(t)),
+                      ],
+                      onChanged: (v) => setS(() => pickType = v ?? pickType),
+                    ),
+                    TextField(
+                      controller: noteCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Note (optional)',
+                        hintText: 'Details',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add event'),
                       onPressed: () {
-                        final n = _recordWatches(
-                          ev,
-                          _sectionDayMs(section),
-                          recordDayMs: today,
-                          section: section,
-                          snack: false,
+                        _addDutyEvent(
+                          day,
+                          section,
+                          pickType,
+                          noteCtrl.text.trim(),
                         );
-                        final note = noteCtrl.text.trim();
-                        for (final t in selected) {
-                          _saveDutyEvent(
-                            DutyDayEvent(
-                              id: DutyDayEvent.makeId(today, section, t),
-                              dayMs: startOfDay(today),
-                              section: section,
-                              type: t,
-                              note: note,
-                              atMs: DateTime.now().millisecondsSinceEpoch,
-                            ),
-                          );
-                        }
-                        Navigator.pop(ctx);
-                        if (mounted) {
-                          setState(() {});
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Recorded $n watch${n == 1 ? '' : 'es'}'
-                                '${selected.isEmpty ? '' : ' + ${selected.length} event(s)'}',
-                              ),
-                            ),
-                          );
-                        }
+                        noteCtrl.clear();
+                        setS(() {});
                       },
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 16),
+                    if (!forCdo)
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          icon: const Icon(Icons.send),
+                          label: const Text('Submit to CDO'),
+                          onPressed: () {
+                            _submitFinalize(section);
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                      )
+                    else ...[
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          icon: const Icon(Icons.check),
+                          label: const Text('Approve & record'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _approveFinalize(ev, section);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.undo),
+                          label: const Text('Return to section leader'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _promptBillReturn(section, finalize: true);
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _promptBillReturn(String section, {required bool finalize}) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Return to section leader'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Reason for return',
+            hintText: 'e.g. POOW not qualified on the 22-02',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final note = ctrl.text.trim();
+              Navigator.pop(ctx);
+              if (finalize) {
+                _returnFinalize(section, note);
+              } else {
+                _returnBill(section, note);
+              }
+            },
+            child: const Text('Return'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The routing status chip + the contextual actions for the current phase.
+  Widget _billStatusBar(Evolution? ev, String section, WatchbillRouting r) {
+    final actions = <Widget>[];
+    switch (r.status) {
+      case BillStatus.draft:
+        if (ev != null && _canEditSectionBill(section)) {
+          actions.add(
+            FilledButton.tonalIcon(
+              onPressed: () => _autoFillSectionBill(ev, section),
+              icon: const Icon(Icons.auto_fix_high, size: 18),
+              label: const Text('Auto-fill'),
+            ),
+          );
+          actions.add(
+            TextButton.icon(
+              onPressed: () => _clearSectionBill(ev, section),
+              icon: const Icon(Icons.clear_all, size: 18),
+              label: const Text('Clear'),
+            ),
+          );
+        }
+        if (_canSubmitBill(section)) {
+          actions.add(
+            FilledButton.icon(
+              onPressed: () => _submitBill(section),
+              icon: const Icon(Icons.send, size: 18),
+              label: const Text('Submit to CDO'),
+            ),
+          );
+        }
+      case BillStatus.submitted:
+        if (_canApproveBill(section)) {
+          actions.add(
+            FilledButton.icon(
+              onPressed: () => _approveBill(section),
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Approve'),
+            ),
+          );
+          actions.add(
+            OutlinedButton.icon(
+              onPressed: () => _promptBillReturn(section, finalize: false),
+              icon: const Icon(Icons.undo, size: 18),
+              label: const Text('Return'),
+            ),
+          );
+        }
+      case BillStatus.approved:
+        if (ev != null && _canSubmitBill(section)) {
+          actions.add(
+            FilledButton.icon(
+              onPressed: () => _openFinalizeSheet(ev, section, forCdo: false),
+              icon: const Icon(Icons.fact_check_outlined, size: 18),
+              label: const Text('Finalize duty day'),
+            ),
+          );
+        }
+      case BillStatus.finalizing:
+        if (ev != null && _canApproveBill(section)) {
+          actions.add(
+            FilledButton.icon(
+              onPressed: () => _openFinalizeSheet(ev, section, forCdo: true),
+              icon: const Icon(Icons.rule, size: 18),
+              label: const Text('Review & approve'),
+            ),
+          );
+        }
+      case BillStatus.finalized:
+        if (_canSubmitBill(section)) {
+          actions.add(
+            TextButton.icon(
+              onPressed: () => _newBillCycle(section),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Start next duty day'),
+            ),
+          );
+        }
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _billStatusChip(r),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 4, children: actions),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _billStatusChip(WatchbillRouting r) {
+    final (label, color, detail) = switch (r.status) {
+      BillStatus.draft => r.returnedNote.isNotEmpty
+          ? (
+              'RETURNED',
+              _duOrange,
+              'by ${_billPersonLabel(r.returnedBy)}: ${r.returnedNote}',
+            )
+          : ('DRAFT', Colors.grey, 'section leader is building the bill'),
+      BillStatus.submitted => (
+        'IN ROUTING',
+        Colors.blue,
+        'submitted by ${_billPersonLabel(r.submittedBy)} — awaiting CDO',
+      ),
+      BillStatus.approved => (
+        'APPROVED',
+        Colors.green,
+        'plan approved by ${_billPersonLabel(r.approvedBy)}',
+      ),
+      BillStatus.finalizing => (
+        'FINALIZING',
+        Colors.blue,
+        'submitted by ${_billPersonLabel(r.submittedBy)} — awaiting CDO',
+      ),
+      BillStatus.finalized => (
+        'FINALIZED',
+        Colors.green,
+        'recorded · approved by ${_billPersonLabel(r.approvedBy)}',
+      ),
+    };
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            border: Border.all(color: color),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
-      ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            detail,
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+            maxLines: 2,
+          ),
+        ),
+      ],
     );
   }
 
@@ -3858,33 +4248,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     final day = _sectionDayMs(section);
     final roles = ev.roles.toList()..sort((a, b) => a.order.compareTo(b.order));
-    final canEdit = _canEditSectionBill(section);
+    final routing = _store.routingFor(section);
+    // Assignments are editable only while drafting, by a section lead or manager.
+    final canEdit = _canEditSectionBill(section) && routing.status.planEditable;
     return Column(
       children: [
-        if (canEdit)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                FilledButton.tonalIcon(
-                  onPressed: () => _autoFillSectionBill(ev, section),
-                  icon: const Icon(Icons.auto_fix_high, size: 18),
-                  label: const Text('Auto-fill from section'),
-                ),
-                TextButton.icon(
-                  onPressed: () => _openRecordDutyDay(ev, section),
-                  icon: const Icon(Icons.fact_check_outlined, size: 18),
-                  label: const Text('Record duty day'),
-                ),
-                TextButton.icon(
-                  onPressed: () => _clearSectionBill(ev, section),
-                  icon: const Icon(Icons.clear_all, size: 18),
-                  label: const Text('Clear'),
-                ),
-              ],
-            ),
-          ),
+        _billStatusBar(ev, section, routing),
         const Divider(height: 1),
         Expanded(
           child: ListView(
@@ -3926,7 +4295,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           padding: EdgeInsets.all(32),
           child: Text(
             'No recorded duty days yet.\n'
-            'Use "Record duty day" on the Watchbill tab to log one.',
+            'A day lands here once the CDO approves the finalized watchbill.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey),
           ),

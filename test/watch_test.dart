@@ -390,4 +390,46 @@ void main() {
       expect(kDutyDayEventTypes, contains('Other'));
     });
   });
+
+  group('watchbill routing (approval chain)', () {
+    test('round-trips, one per section', () {
+      final r = WatchbillRouting(
+        id: WatchbillRouting.makeId('1'),
+        section: '1',
+        status: BillStatus.submitted,
+        submittedBy: 'acct-sl',
+        dayMs: 999,
+        updatedAtMs: 5,
+      );
+      expect(r.id, '1');
+      final back = WatchbillRouting.fromJson(r.toJson());
+      expect(back.status, BillStatus.submitted);
+      expect(back.submittedBy, 'acct-sl');
+      expect(back.dayMs, 999);
+      expect(back.updatedAtMs, 5);
+    });
+
+    test('status capabilities: editable only in draft; in-routing while waiting',
+        () {
+      expect(BillStatus.draft.planEditable, isTrue);
+      for (final s in [
+        BillStatus.submitted,
+        BillStatus.approved,
+        BillStatus.finalizing,
+        BillStatus.finalized,
+      ]) {
+        expect(s.planEditable, isFalse, reason: s.name);
+      }
+      expect(BillStatus.submitted.inRouting, isTrue);
+      expect(BillStatus.finalizing.inRouting, isTrue);
+      expect(BillStatus.approved.inRouting, isFalse);
+    });
+
+    test('unknown status token defaults to draft', () {
+      expect(billStatusFromToken('bogus'), BillStatus.draft);
+      for (final s in BillStatus.values) {
+        expect(billStatusFromToken(s.token), s);
+      }
+    });
+  });
 }
