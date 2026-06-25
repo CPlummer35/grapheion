@@ -100,8 +100,10 @@ final ColorScheme _duDark =
     ).copyWith(
       primary: _duCyan,
       onPrimary: _duNavy,
-      secondary: _duGold,
-      onSecondary: _duGoldInk,
+      secondary: _duOrange,
+      onSecondary: Colors.white,
+      secondaryContainer: const Color(0xFF6E2310), // muted brand red — tonal/chips
+      onSecondaryContainer: const Color(0xFFFFD6C9),
       tertiary: _duOrange,
       onTertiary: Colors.white,
       surface: _duSurface,
@@ -117,8 +119,10 @@ final ColorScheme _duLight =
     ).copyWith(
       primary: _duBlue,
       onPrimary: Colors.white,
-      secondary: _duGold,
-      onSecondary: _duGoldInk,
+      secondary: _duOrange,
+      onSecondary: Colors.white,
+      secondaryContainer: const Color(0xFFFFDBD1), // light brand red — tonal/chips
+      onSecondaryContainer: const Color(0xFF3D0B00),
       tertiary: _duOrange,
     );
 
