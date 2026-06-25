@@ -3230,6 +3230,38 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _recurringSection(BuildContext sheetCtx, PmsCheck check) {
+    if (check.periodicity == Periodicity.daily) {
+      return const SizedBox.shrink();
+    }
+    const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return ListTile(
+      leading: const Icon(Icons.repeat),
+      title: const Text('Auto-place each week'),
+      subtitle: Text(
+        check.placeWeekday == null
+            ? 'off — place manually'
+            : 'every ${labels[check.placeWeekday! - 1]}',
+      ),
+      trailing: DropdownButton<int?>(
+        value: check.placeWeekday,
+        hint: const Text('off'),
+        items: [
+          const DropdownMenuItem(value: null, child: Text('off')),
+          for (var i = 1; i <= 7; i++)
+            DropdownMenuItem(value: i, child: Text(labels[i - 1])),
+        ],
+        onChanged: (v) {
+          check.placeWeekday = v;
+          if (v != null) check.scheduledForMs = null; // recurring supersedes
+          check.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+          _savePmsCheck(check);
+          Navigator.pop(sheetCtx);
+        },
+      ),
+    );
+  }
+
   Widget _deferSection(BuildContext sheetCtx, PmsCheck check) {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (check.deferredAt(now)) {
@@ -3496,6 +3528,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     required Periodicity periodicity,
     required int estMinutes,
     List<MrcStep>? steps,
+    String trigger = '',
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final c = PmsCheck.create(
@@ -3509,7 +3542,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       estMinutes: estMinutes,
       nowMs: now,
       steps: steps,
-    );
+    )..trigger = trigger;
     _savePmsCheck(c);
     return c;
   }
@@ -3588,6 +3621,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           lastDoneMs: s.$6 == null ? null : now - s.$6! * day,
           lastBy: s.$6 == null ? '' : 'demo',
           steps: _bikeSteps(s.$1),
+          trigger: s.$4 == Periodicity.situational ? 'pad thickness < 1.5 mm' : '',
           createdAtMs: now,
           updatedAtMs: now,
         ),
@@ -5766,11 +5800,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     // Daily checks recur every day, so they appear on every day automatically;
     // other checks appear on the one day they're placed.
     List<Widget> forDay(int dayMs) {
+      final wd = DateTime.fromMillisecondsSinceEpoch(dayMs).weekday;
       final dc =
           checks
               .where(
                 (c) =>
                     c.periodicity == Periodicity.daily ||
+                    c.placeWeekday == wd || // recurring auto-placement
                     (c.scheduledForMs != null &&
                         isSameDay(c.scheduledForMs!, dayMs)),
               )
@@ -5792,6 +5828,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             .where(
               (c) =>
                   c.periodicity != Periodicity.daily &&
+                  c.placeWeekday == null && // auto-placed checks live on their day
                   !thisWeek(c.scheduledForMs),
             )
             .toList()
@@ -5862,7 +5899,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   String _dueText(PmsCheck c, int nowMs) {
-    if (!c.periodicity.isCalendar) return 'as required';
+    if (!c.periodicity.isCalendar) {
+      return c.trigger.isEmpty ? 'as required' : 'when: ${c.trigger}';
+    }
     final d = c.daysUntilDue(nowMs);
     switch (c.statusAt(nowMs)) {
       case PmsStatus.deferred:
@@ -5882,6 +5921,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final title = TextEditingController();
     final ein = TextEditingController();
     final mins = TextEditingController(text: '15');
+    final trigger = TextEditingController();
     final stepText = <TextEditingController>[];
     final stepStd = <TextEditingController>[];
     Periodicity per = Periodicity.monthly;
@@ -5972,6 +6012,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   'MRC code: ${per.code}-${int.tryParse(seq.text.trim()) ?? 1}',
                   style: const TextStyle(color: Colors.grey, fontSize: 12),
                 ),
+                if (per == Periodicity.situational) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: trigger,
+                    decoration: const InputDecoration(
+                      labelText: 'Trigger / condition',
+                      hintText: 'e.g. pad thickness < 1.5 mm',
+                    ),
+                  ),
+                ],
                 const Divider(height: 24),
                 Row(
                   children: [
@@ -6051,6 +6101,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       periodicity: per,
                       estMinutes: int.tryParse(mins.text.trim()) ?? 0,
                       steps: builtSteps,
+                      trigger: trigger.text.trim(),
                     );
                     Navigator.pop(ctx);
                   },
@@ -6432,6 +6483,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   ],
                   if (check != null) ...[
                     const Divider(),
+                    _recurringSection(ctx, check),
                     _deferSection(ctx, check),
                   ],
                   const SizedBox(height: 12),

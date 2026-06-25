@@ -282,4 +282,23 @@ void main() {
       expect(back.deferredUntilMs, 5 * _day);
     });
   });
+
+  group('auto-placement + situational trigger', () {
+    test('weekday placement + trigger round-trip; default to none', () {
+      final c = _weekly()
+        ..placeWeekday = 5 // Friday
+        ..trigger = 'pads < 1.5mm';
+      final back = PmsCheck.fromJson(c.toJson());
+      expect(back.placeWeekday, 5);
+      expect(back.trigger, 'pads < 1.5mm');
+      // a legacy check decodes to manual placement + no trigger
+      final legacy = PmsCheck.fromJson({
+        'id': 'L',
+        'mip': 'X',
+        'periodicity': 'monthly',
+      });
+      expect(legacy.placeWeekday, isNull);
+      expect(legacy.trigger, '');
+    });
+  });
 }

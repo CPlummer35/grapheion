@@ -120,6 +120,8 @@ class PmsCheck {
   List<MrcStep> steps; // the MRC procedure (empty = a simple sign-off check)
   int? deferredUntilMs; // deferred until this day (null = not deferred)
   String deferReason; // why it was deferred (parts/ops/access/…)
+  int? placeWeekday; // 1=Mon..7=Sun: auto-place on this weekday (null = manual)
+  String trigger; // situational (R) condition that prompts the check
   final int createdAtMs;
   int updatedAtMs;
 
@@ -140,6 +142,8 @@ class PmsCheck {
     List<MrcStep>? steps,
     this.deferredUntilMs,
     this.deferReason = '',
+    this.placeWeekday,
+    this.trigger = '',
     required this.createdAtMs,
     required this.updatedAtMs,
   }) : doneDays = doneDays ?? [],
@@ -242,6 +246,8 @@ class PmsCheck {
     'steps': steps.map((s) => s.toJson()).toList(),
     'deferredUntilMs': deferredUntilMs,
     'deferReason': deferReason,
+    'placeWeekday': placeWeekday,
+    'trigger': trigger,
     'createdAtMs': createdAtMs,
     'updatedAtMs': updatedAtMs,
   };
@@ -268,6 +274,8 @@ class PmsCheck {
         .toList(),
     deferredUntilMs: j['deferredUntilMs'] as int?,
     deferReason: (j['deferReason'] ?? '') as String,
+    placeWeekday: j['placeWeekday'] as int?,
+    trigger: (j['trigger'] ?? '') as String,
     createdAtMs: (j['createdAtMs'] ?? 0) as int,
     updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
   );
