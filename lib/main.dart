@@ -164,17 +164,17 @@ ThemeData _grapheionTheme(Brightness brightness) {
         letterSpacing: 0.5,
       ),
     ),
-    // Gold pill CTAs (the DU button look).
+    // DU orange-red pill CTAs (the primary button look).
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: _duGold,
-        foregroundColor: _duGoldInk,
+        backgroundColor: _duOrange,
+        foregroundColor: Colors.white,
         shape: const StadiumBorder(),
       ),
     ),
     floatingActionButtonTheme: const FloatingActionButtonThemeData(
-      backgroundColor: _duGold,
-      foregroundColor: _duGoldInk,
+      backgroundColor: _duOrange,
+      foregroundColor: Colors.white,
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
@@ -4062,7 +4062,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(
-                  '${r.name} · $slot',
+                  // Standing stations pass the role name as the slot label, so
+                  // avoid "Role · Role"; rotating ones pass "Sec 1" etc.
+                  slot.isEmpty || slot == r.name ? r.name : '${r.name} · $slot',
                   style: Theme.of(ctx).textTheme.titleMedium,
                 ),
               ),
@@ -7420,7 +7422,8 @@ class _ConfirmButtonState extends State<_ConfirmButton> {
       label: Text(_armed ? widget.confirmLabel : widget.label),
       style: _armed
           ? FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
+              backgroundColor: _duGold,
+              foregroundColor: _duGoldInk,
             )
           : null,
       onPressed: () {
