@@ -174,6 +174,7 @@ class Account {
   String
   boundNodeId; // device this account is locked to ('' = any); Kratos uses it
   String dutySection; // in-port duty section, e.g. "1".."5" ('' = unassigned)
+  DutyPosition dutyPosition; // job WITHIN the section — drives section perms
   String billet; // WQSB billet / assigned position (free text, '' = none)
   final int createdAtMs;
   int updatedAtMs; // bumped on every edit; drives last-write-wins on sync
@@ -188,6 +189,7 @@ class Account {
     required this.pinHash,
     this.boundNodeId = '',
     this.dutySection = '',
+    this.dutyPosition = DutyPosition.watchstander,
     this.billet = '',
     required this.createdAtMs,
     this.updatedAtMs = 0,
@@ -214,6 +216,7 @@ class Account {
     'pinHash': pinHash,
     'boundNodeId': boundNodeId,
     'dutySection': dutySection,
+    'dutyPosition': dutyPosition.token,
     'billet': billet,
     'createdAtMs': createdAtMs,
     'updatedAtMs': updatedAtMs,
@@ -231,6 +234,7 @@ class Account {
         pinHash: (j['pinHash'] ?? '') as String,
         boundNodeId: (j['boundNodeId'] ?? '') as String,
         dutySection: (j['dutySection'] ?? '') as String,
+        dutyPosition: dutyPositionFromToken((j['dutyPosition'] ?? '') as String),
         billet: (j['billet'] ?? '') as String,
         createdAtMs: (j['createdAtMs'] ?? 0) as int,
         updatedAtMs: (j['updatedAtMs'] ?? 0) as int,

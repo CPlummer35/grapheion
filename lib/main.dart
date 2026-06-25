@@ -1834,6 +1834,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// DH-and-below sees only their own duty section.
   bool get _canManageSections => _role == Role.threeMC || _role == Role.kratos;
 
+  /// Section-watchbill admin (create / auto-fill / record / clear / assign).
+  /// Duty-POSITION axis, additive to role: 3MC/Kratos manage any section; a
+  /// Section Leader or CDO manages THEIR own section's bill. A plain
+  /// watchstander sees the bill read-only.
+  bool _canEditSectionBill(String section) {
+    if (_canManageSections) return true;
+    final a = _account;
+    return a != null &&
+        a.dutySection == section &&
+        a.dutyPosition.leadsDutySection;
+  }
+
   /// The in-port stations a duty section must be able to man — the distinct role
   /// stations across the in-port evolutions (drives the auto-partition).
   List<String> _inPortRequiredStations() {
@@ -3502,6 +3514,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     Evolution ev,
     EvolutionRole r, {
     Set<String>? scope,
+    bool? canEdit,
   }) {
     final scheme = Theme.of(context).colorScheme;
     return Column(
@@ -3524,6 +3537,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             'Sec ${s.label}',
             '${s.start}-${s.end}',
             scope: scope,
+            canEdit: canEdit,
           ),
       ],
     );
@@ -3538,7 +3552,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     String label,
     String sub, {
     Set<String>? scope,
+    bool? canEdit,
   }) {
+    final edit = canEdit ?? _canManageWatch;
     final pid = _store.billAssignee(day, ev.id, r.id, shiftId);
     final unqual =
         pid != null && pid.isNotEmpty && !_store.isQualified(pid, r.stationId);
@@ -3572,8 +3588,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         sub,
         style: const TextStyle(fontSize: 11, color: Colors.grey),
       ),
-      trailing: _canManageWatch ? const Icon(Icons.edit, size: 18) : null,
-      onTap: _canManageWatch
+      trailing: edit ? const Icon(Icons.edit, size: 18) : null,
+      onTap: edit
           ? () => _openBillAssign(day, ev, r, shiftId, label, scope: scope)
           : null,
     );
@@ -3842,9 +3858,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     final day = _sectionDayMs(section);
     final roles = ev.roles.toList()..sort((a, b) => a.order.compareTo(b.order));
+    final canEdit = _canEditSectionBill(section);
     return Column(
       children: [
-        if (_canManageWatch)
+        if (canEdit)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
             child: Wrap(
@@ -3874,7 +3891,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             children: [
               for (final r in roles)
                 if (r.rotating)
-                  _billRotatingGroup(day, ev, r, scope: memberIds)
+                  _billRotatingGroup(
+                    day,
+                    ev,
+                    r,
+                    scope: memberIds,
+                    canEdit: canEdit,
+                  )
                 else
                   _billSlotTile(
                     day,
@@ -3884,6 +3907,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     r.name,
                     'whole day',
                     scope: memberIds,
+                    canEdit: canEdit,
                   ),
             ],
           ),
@@ -4261,7 +4285,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
       title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
       subtitle: Text(
-        '${a.role.title} · ${_divisionName(a)}',
+        '${a.role.title} · ${_divisionName(a)}'
+        '${a.dutyPosition.leadsDutySection ? ' · ${a.dutyPosition.tag}' : ''}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -4400,6 +4425,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         : null;
     var divId = curWc?.divisionId;
     var dutySection = a.dutySection;
+    var dutyPosition = a.dutyPosition;
     final billetCtrl = TextEditingController(text: a.billet);
     final depts = _org.departments.values.toList()
       ..sort((x, y) => x.name.compareTo(y.name));
@@ -4479,6 +4505,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onChanged: (v) => setS(() => dutySection = v ?? ''),
                 ),
                 const SizedBox(height: 12),
+                DropdownButtonFormField<DutyPosition>(
+                  initialValue: dutyPosition,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Duty position',
+                    helperText:
+                        'Section Leader / CDO can run the section watchbill',
+                  ),
+                  items: [
+                    for (final p in DutyPosition.values)
+                      DropdownMenuItem(value: p, child: Text(p.title)),
+                  ],
+                  onChanged: (p) => setS(() => dutyPosition = p ?? dutyPosition),
+                ),
+                const SizedBox(height: 12),
                 TextField(
                   controller: billetCtrl,
                   decoration: const InputDecoration(
@@ -4492,6 +4533,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     a.role = role;
                     if (divId != null) a.workcenterId = '$divId-WC';
                     a.dutySection = dutySection;
+                    a.dutyPosition = dutyPosition;
                     a.billet = billetCtrl.text.trim();
                     _updateAccount(a);
                     Navigator.pop(ctx);

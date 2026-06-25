@@ -48,4 +48,29 @@ void main() {
       }
     });
   });
+
+  group('duty position (the second permission axis)', () {
+    test('only Section Leader + CDO lead the duty section', () {
+      expect(DutyPosition.sectionLeader.leadsDutySection, isTrue);
+      expect(DutyPosition.cdo.leadsDutySection, isTrue);
+      expect(DutyPosition.watchstander.leadsDutySection, isFalse);
+    });
+    test('token round-trips; unknown + missing default to watchstander', () {
+      for (final p in DutyPosition.values) {
+        expect(dutyPositionFromToken(p.token), p);
+      }
+      expect(dutyPositionFromToken('bogus'), DutyPosition.watchstander);
+      expect(dutyPositionFromToken(''), DutyPosition.watchstander);
+    });
+    test('Account serializes dutyPosition; legacy records default it', () {
+      final a = _acct(Role.lpo)..dutyPosition = DutyPosition.sectionLeader;
+      expect(Account.fromJson(a.toJson()).dutyPosition,
+          DutyPosition.sectionLeader);
+      // A record from before the field existed decodes to watchstander.
+      final legacy = Map<String, dynamic>.from(a.toJson())..remove('dutyPosition');
+      expect(Account.fromJson(legacy).dutyPosition, DutyPosition.watchstander);
+      // It's independent of the primary role (additive axis).
+      expect(Account.fromJson(a.toJson()).role, Role.lpo);
+    });
+  });
 }

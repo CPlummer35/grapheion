@@ -74,6 +74,43 @@ extension RoleInfo on Role {
 Role roleFromToken(String t) =>
     Role.values.firstWhere((r) => r.name == t, orElse: () => Role.technician);
 
+/// A person's job WITHIN their duty section — a SEPARATE axis from [Role].
+/// Drives section-level permissions (create/edit the watchbill, record the duty
+/// day) and ACCUMULATES with role-based permissions rather than replacing them:
+/// a Section Leader who is also a divisional Chief keeps their role's access and
+/// gains the section-admin access on top.
+enum DutyPosition {
+  watchstander, // default — stands watches, no section-admin authority
+  sectionLeader, // runs the duty section (typically a divisional chief)
+  cdo, // Command Duty Officer — senior of the section, in charge for the day
+}
+
+extension DutyPositionInfo on DutyPosition {
+  String get title => switch (this) {
+    DutyPosition.watchstander => 'Watchstander',
+    DutyPosition.sectionLeader => 'Section Leader',
+    DutyPosition.cdo => 'Command Duty Officer',
+  };
+
+  String get tag => switch (this) {
+    DutyPosition.watchstander => 'WATCH',
+    DutyPosition.sectionLeader => 'SEC LDR',
+    DutyPosition.cdo => 'CDO',
+  };
+
+  /// Section leadership: may create/edit/record this section's watchbill.
+  bool get leadsDutySection =>
+      this == DutyPosition.sectionLeader || this == DutyPosition.cdo;
+
+  /// Stable wire token for JSON (keyed on the enum name).
+  String get token => name;
+}
+
+DutyPosition dutyPositionFromToken(String t) => DutyPosition.values.firstWhere(
+  (p) => p.name == t,
+  orElse: () => DutyPosition.watchstander,
+);
+
 /// On-ship approval ladder a job climbs after the technician submits it
 /// (WCS → LPO → DIVO). The same three rungs are reused for the close-out chain.
 /// The Port Engineer is NOT on this ladder — the job reaches the PE only when
