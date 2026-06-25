@@ -29,6 +29,7 @@ const kWcs = 'workcenters';
 const kAccounts = 'accounts';
 const kCasreps = 'casreps';
 const kPmsChecks = 'pmschecks'; // SKED / PMS checks
+const kPmsDone = 'pmsdone'; // signed MRC accomplishments (one per check + day)
 const kQualifications = 'qualifications'; // qual tree nodes (watch/knowledge/…)
 const kQuals = 'quals'; // PQS progress (person x qualification)
 const kEvolutions = 'evolutions'; // evolutions (role sets, e.g. In-Port Duty)
@@ -67,6 +68,7 @@ class MeshStore {
   final Map<String, Account> accounts = {};
   final Map<String, Casrep> casreps = {};
   final Map<String, PmsCheck> pmsChecks = {};
+  final Map<String, PmsAccomplishment> pmsDone = {};
   final Map<String, Qualification> qualifications = {};
   final Map<String, PersonQual> quals = {}; // keyed by PersonQual.makeId
   final Map<String, Evolution> evolutions = {};
@@ -145,6 +147,14 @@ class MeshStore {
         pmsChecks[docId] = PmsCheck.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
         );
+      } else if (coll == kPmsDone) {
+        final a = PmsAccomplishment.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        final old = pmsDone[docId];
+        if (old == null || a.updatedAtMs >= old.updatedAtMs) {
+          pmsDone[docId] = a; // LWW
+        }
       } else if (coll == kQualifications) {
         qualifications[docId] = Qualification.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
@@ -376,6 +386,36 @@ class MeshStore {
     );
   }
 
+  /// The signed accomplishment of [checkId] on [dayMs]'s day, if any.
+  PmsAccomplishment? accomplishmentFor(String checkId, int dayMs) =>
+      pmsDone[PmsAccomplishment.makeId(checkId, dayMs)];
+
+  /// The most recent accomplishment of [checkId] across all days.
+  PmsAccomplishment? latestAccomplishment(String checkId) {
+    PmsAccomplishment? best;
+    for (final a in pmsDone.values) {
+      if (a.checkId != checkId) continue;
+      if (best == null || a.atMs > best.atMs) best = a;
+    }
+    return best;
+  }
+
+  /// PMS compliance at [nowMs]: of the calendar checks in scope, how many are
+  /// NOT overdue — the standard "in good standing ÷ total" PM-health number.
+  /// Situational (R) checks have no due date and are excluded. Optionally
+  /// scoped to a [workcenter]. Returns (ok, total); pct = ok/total (100% if 0).
+  (int ok, int total) pmsCompliance(int nowMs, {String? workcenter}) {
+    var ok = 0, total = 0;
+    for (final c in pmsChecks.values) {
+      if (!c.periodicity.isCalendar) continue;
+      if (workcenter != null && c.workcenter != workcenter) continue;
+      if (!canSeeCheck(c)) continue;
+      total++;
+      if (c.statusAt(nowMs) != PmsStatus.overdue) ok++;
+    }
+    return (ok, total);
+  }
+
   /// Whether [j] is waiting on the signed-in role's action (drives the Inbox).
   bool needsMyAction(Job j) {
     switch (j.phase) {
@@ -535,6 +575,7 @@ class MeshStore {
     accounts.clear();
     casreps.clear();
     pmsChecks.clear();
+    pmsDone.clear();
     qualifications.clear();
     quals.clear();
     evolutions.clear();

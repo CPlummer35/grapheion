@@ -156,4 +156,74 @@ void main() {
       expect(back.seq, 1);
     });
   });
+
+  group('MRC steps + signed accomplishment', () {
+    test('procedure steps round-trip on the check', () {
+      final c = _weekly()
+        ..steps = [
+          MrcStep(id: 's1', text: 'Check pressure', standard: '80–100 psi'),
+          MrcStep(id: 's2', text: 'Inspect tread'),
+        ];
+      final back = PmsCheck.fromJson(c.toJson());
+      expect(back.steps.length, 2);
+      expect(back.steps.first.text, 'Check pressure');
+      expect(back.steps.first.standard, '80–100 psi');
+      expect(back.steps[1].standard, '');
+    });
+
+    test('a legacy check with no steps decodes to an empty list', () {
+      final back = PmsCheck.fromJson({
+        'id': 'L',
+        'mip': 'X',
+        'periodicity': 'monthly',
+      });
+      expect(back.steps, isEmpty);
+    });
+
+    test('accomplishment keys by check + day (same day → same id)', () {
+      expect(
+        PmsAccomplishment.makeId('c1', 5 * _day + 3600000),
+        PmsAccomplishment.makeId('c1', 5 * _day + 7200000),
+      );
+    });
+
+    test('an UNSAT step flags a discrepancy; round-trips with results', () {
+      final a = PmsAccomplishment(
+        id: PmsAccomplishment.makeId('c1', 5 * _day),
+        checkId: 'c1',
+        dayMs: 5 * _day,
+        by: 'MM2 Smith',
+        atMs: 5 * _day + 3600000,
+        results: [
+          StepResult(stepId: 's1', sat: true, reading: '90 psi'),
+          StepResult(stepId: 's2', sat: false, reading: 'cut in casing'),
+        ],
+        note: 'sidewall cut',
+        jobId: 'JOB-9',
+        updatedAtMs: 5 * _day + 3600000,
+      );
+      expect(a.hasDiscrepancy, isTrue);
+      final back = PmsAccomplishment.fromJson(a.toJson());
+      expect(back.by, 'MM2 Smith');
+      expect(back.results.length, 2);
+      expect(back.results[1].sat, isFalse);
+      expect(back.results[1].reading, 'cut in casing');
+      expect(back.note, 'sidewall cut');
+      expect(back.jobId, 'JOB-9');
+      expect(back.hasDiscrepancy, isTrue);
+    });
+
+    test('all-SAT results have no discrepancy', () {
+      final a = PmsAccomplishment(
+        id: 'x',
+        checkId: 'c',
+        dayMs: 0,
+        by: 'b',
+        atMs: 0,
+        results: [StepResult(stepId: 's1', sat: true)],
+        updatedAtMs: 0,
+      );
+      expect(a.hasDiscrepancy, isFalse);
+    });
+  });
 }

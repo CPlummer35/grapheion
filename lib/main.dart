@@ -674,6 +674,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           for (final p in _store.pmsChecks.values) {
             _bleBroadcast(kPmsChecks, p.id, jsonEncode(p.toJson()));
           }
+          for (final a in _store.pmsDone.values) {
+            _bleBroadcast(kPmsDone, a.id, jsonEncode(a.toJson()));
+          }
           for (final s in _store.qualifications.values) {
             _bleBroadcast(kQualifications, s.id, jsonEncode(s.toJson()));
           }
@@ -1149,6 +1152,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       kAccounts,
       kCasreps,
       kPmsChecks,
+      kPmsDone,
       kQualifications,
       kQuals,
       kEvolutions,
@@ -3019,15 +3023,183 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
-  /// Record a PMS check as accomplished by the signed-in person on [forDayMs]
-  /// (defaults to today) and sync it.
-  void _accomplishCheck(PmsCheck c, {int? forDayMs}) {
-    c.accomplish(
-      _name,
-      DateTime.now().millisecondsSinceEpoch,
-      forDayMs: forDayMs,
+  void _saveAccomplishment(PmsAccomplishment a) {
+    a.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+    final json = jsonEncode(a.toJson());
+    _store.pmsDone[a.id] = a;
+    _node!.putRaw(kPmsDone, a.id, json);
+    _bleBroadcast(kPmsDone, a.id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// Complete an MRC: walk its procedure steps, mark each SAT/UNSAT (with an
+  /// optional reading), sign, and record a signed accomplishment for [forDayMs]
+  /// (defaults to today). An UNSAT step offers to raise a corrective job.
+  void _openCompleteCheck(PmsCheck c, {int? forDayMs}) {
+    final day = forDayMs ?? DateTime.now().millisecondsSinceEpoch;
+    final existing = _store.accomplishmentFor(c.id, day);
+    final sat = <String, bool>{};
+    final readingCtrl = <String, TextEditingController>{};
+    for (final s in c.steps) {
+      StepResult? prev;
+      for (final r in existing?.results ?? const <StepResult>[]) {
+        if (r.stepId == s.id) prev = r;
+      }
+      sat[s.id] = prev?.sat ?? true;
+      readingCtrl[s.id] = TextEditingController(text: prev?.reading ?? '');
+    }
+    final noteCtrl = TextEditingController(text: existing?.note ?? '');
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              16 + MediaQuery.of(ctx).viewInsets.bottom,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    c.title.isEmpty ? '${c.mip} · ${c.mrcCode}' : c.title,
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${c.mip} · ${c.mrcCode}'
+                    '${c.estMinutes > 0 ? ' · ${c.estMinutes} min' : ''}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  if (c.steps.isEmpty)
+                    const Text(
+                      'No procedure steps — sign to record the check.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  for (var i = 0; i < c.steps.length; i++) ...[
+                    _completeStepRow(
+                      setS,
+                      i + 1,
+                      c.steps[i],
+                      sat,
+                      readingCtrl[c.steps[i].id]!,
+                    ),
+                    const Divider(height: 16),
+                  ],
+                  TextField(
+                    controller: noteCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Remarks (optional)',
+                      hintText: 'Notes for the record',
+                    ),
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.draw),
+                      label: Text('Sign & complete as $_name'),
+                      onPressed: () {
+                        final now = DateTime.now().millisecondsSinceEpoch;
+                        final results = [
+                          for (final s in c.steps)
+                            StepResult(
+                              stepId: s.id,
+                              sat: sat[s.id] ?? true,
+                              reading: readingCtrl[s.id]!.text.trim(),
+                            ),
+                        ];
+                        final a = PmsAccomplishment(
+                          id: PmsAccomplishment.makeId(c.id, day),
+                          checkId: c.id,
+                          dayMs: startOfDay(day),
+                          by: _name,
+                          atMs: now,
+                          results: results,
+                          note: noteCtrl.text.trim(),
+                          jobId: existing?.jobId ?? '',
+                          updatedAtMs: now,
+                        );
+                        _saveAccomplishment(a);
+                        c.accomplish(_name, now, forDayMs: day);
+                        _savePmsCheck(c);
+                        Navigator.pop(ctx);
+                        if (a.hasDiscrepancy && a.jobId.isEmpty) {
+                          _promptDiscrepancyJob(c, a);
+                        } else if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Completed + signed')),
+                          );
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
-    _savePmsCheck(c);
+  }
+
+  Widget _completeStepRow(
+    StateSetter setS,
+    int n,
+    MrcStep s,
+    Map<String, bool> sat,
+    TextEditingController reading,
+  ) {
+    final ok = sat[s.id] ?? true;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$n. ${s.text}', style: const TextStyle(fontWeight: FontWeight.w500)),
+        if (s.standard.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              'Standard: ${s.standard}',
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            ChoiceChip(
+              label: const Text('SAT'),
+              selected: ok,
+              onSelected: (_) => setS(() => sat[s.id] = true),
+            ),
+            const SizedBox(width: 8),
+            ChoiceChip(
+              label: const Text('UNSAT'),
+              selected: !ok,
+              selectedColor: _duOrange,
+              onSelected: (_) => setS(() => sat[s.id] = false),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: reading,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  hintText: 'reading',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   PmsCheck _createPmsCheck({
@@ -3037,6 +3209,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     required String ein,
     required Periodicity periodicity,
     required int estMinutes,
+    List<MrcStep>? steps,
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final c = PmsCheck.create(
@@ -3049,6 +3222,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       periodicity: periodicity,
       estMinutes: estMinutes,
       nowMs: now,
+      steps: steps,
     );
     _savePmsCheck(c);
     return c;
@@ -3127,11 +3301,63 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           estMinutes: s.$5,
           lastDoneMs: s.$6 == null ? null : now - s.$6! * day,
           lastBy: s.$6 == null ? '' : 'demo',
+          steps: _bikeSteps(s.$1),
           createdAtMs: now,
           updatedAtMs: now,
         ),
       );
     }
+  }
+
+  /// Bicycle-themed MRC procedure steps for the demo seed, keyed by check id.
+  static List<MrcStep> _bikeSteps(String id) {
+    final raw = switch (id) {
+      'pms-bike-001' => [
+        ('Squeeze both tires — firm?', '80–100 psi'),
+        ('Inspect tread for cuts / embedded debris', 'no cuts to casing'),
+        ('Confirm quick-release skewers closed', ''),
+      ],
+      'pms-bike-002' => [
+        ('Wipe chain down with a rag', ''),
+        ('Apply lubricant to each link', ''),
+        ('Measure chain wear with a gauge', '< 0.75% stretch'),
+      ],
+      'pms-bike-003' => [
+        ('Torque stem bolts', '5 N·m'),
+        ('Torque seatpost clamp', '6 N·m'),
+        ('Check crank-arm bolts tight', ''),
+      ],
+      'pms-bike-004' => [
+        ('Remove + clean headset bearing', ''),
+        ('Inspect bearing for pitting / roughness', 'smooth, no play'),
+        ('Re-grease + set preload', 'no play, free rotation'),
+      ],
+      'pms-bike-005' => [
+        ('Spin wheel, check lateral true', '< 1 mm wobble'),
+        ('Check spoke tension around the wheel', 'even tension'),
+        ('Inspect rim sidewall for cracks / wear', ''),
+      ],
+      'pms-bike-006' => [
+        ('Bleed brake lines', 'no air in system'),
+        ('Measure brake pad thickness', '> 2 mm'),
+        ('Test lever firmness', 'firm, no fade'),
+      ],
+      'pms-bike-007' => [
+        ('Degrease + inspect drivetrain', ''),
+        ('Check chainrings / cassette for wear', 'teeth not hooked'),
+        ('Reassemble + re-grease all bearings', ''),
+      ],
+      'pms-bike-008' => [
+        ('Measure brake pad thickness', 'replace if < 1.5 mm'),
+        ('Replace pads if worn', ''),
+        ('Bed in new pads', ''),
+      ],
+      _ => <(String, String)>[],
+    };
+    return [
+      for (var i = 0; i < raw.length; i++)
+        MrcStep(id: '$id-s${i + 1}', text: raw[i].$1, standard: raw[i].$2),
+    ];
   }
 
   void _saveOrgEntity(String coll, String id, String json) {
@@ -3183,6 +3409,88 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final json = jsonEncode(ev.toJson());
     _node!.putRaw(kLog, ev.docId, json);
     _bleBroadcast(kLog, ev.docId, json);
+  }
+
+  /// Offer to raise a corrective (CSMP) job from an MRC's UNSAT step(s), and
+  /// link it back to the accomplishment so the discrepancy is traceable.
+  void _promptDiscrepancyJob(PmsCheck c, PmsAccomplishment a) {
+    final unsat = <String>[];
+    for (final s in c.steps) {
+      for (final r in a.results) {
+        if (r.stepId == s.id && !r.sat) {
+          final std = s.standard.isEmpty ? '' : ' (std: ${s.standard})';
+          final read = r.reading.isEmpty ? '' : ' — read ${r.reading}';
+          unsat.add('${s.text}$std$read');
+        }
+      }
+    }
+    final mrc = c.title.isEmpty ? '${c.mip} ${c.mrcCode}' : c.title;
+    final symptom =
+        'PMS discrepancy on ${c.mip} ${c.mrcCode}:\n• ${unsat.join('\n• ')}'
+        '${a.note.isEmpty ? '' : '\nRemarks: ${a.note}'}';
+    var priority = 3;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Discrepancy found'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${unsat.length} step(s) UNSAT. Raise a corrective job?'),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: priority,
+                decoration: const InputDecoration(labelText: 'Priority'),
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text('1 — highest')),
+                  DropdownMenuItem(value: 2, child: Text('2')),
+                  DropdownMenuItem(value: 3, child: Text('3')),
+                  DropdownMenuItem(value: 4, child: Text('4 — routine')),
+                ],
+                onChanged: (v) => setS(() => priority = v ?? 3),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Not now'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final now = DateTime.now().millisecondsSinceEpoch;
+                final job = Job.originate(
+                  id: 'JOB-$now',
+                  title: 'PMS: $mrc',
+                  ein: c.ein,
+                  symptom: symptom,
+                  priority: priority,
+                  originator: _name,
+                  workcenter: c.workcenter,
+                  nowMs: now,
+                );
+                _jobs[job.id] = job;
+                _saveJob(job);
+                _appendEvent(job, 'originate', 'from PMS ${c.mip} ${c.mrcCode}');
+                a.jobId = job.id;
+                _saveAccomplishment(a);
+                Navigator.pop(ctx);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Raised ${job.id} for the discrepancy'),
+                    ),
+                  );
+                }
+              },
+              child: const Text('Create job'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _createJob({
@@ -5274,6 +5582,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final title = TextEditingController();
     final ein = TextEditingController();
     final mins = TextEditingController(text: '15');
+    final stepText = <TextEditingController>[];
+    final stepStd = <TextEditingController>[];
     Periodicity per = Periodicity.monthly;
     showModalBottomSheet(
       context: context,
@@ -5362,11 +5672,77 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   'MRC code: ${per.code}-${int.tryParse(seq.text.trim()) ?? 1}',
                   style: const TextStyle(color: Colors.grey, fontSize: 12),
                 ),
+                const Divider(height: 24),
+                Row(
+                  children: [
+                    const Text(
+                      'Procedure steps',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () => setS(() {
+                        stepText.add(TextEditingController());
+                        stepStd.add(TextEditingController());
+                      }),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add step'),
+                    ),
+                  ],
+                ),
+                for (var i = 0; i < stepText.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: stepText[i],
+                            decoration: InputDecoration(
+                              isDense: true,
+                              hintText: 'Step ${i + 1}',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 2,
+                          child: TextField(
+                            controller: stepStd[i],
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'standard',
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.remove_circle_outline,
+                            size: 20,
+                          ),
+                          onPressed: () => setS(() {
+                            stepText.removeAt(i);
+                            stepStd.removeAt(i);
+                          }),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: () {
                     final m = mip.text.trim();
                     if (m.isEmpty) return;
+                    final builtSteps = [
+                      for (var i = 0; i < stepText.length; i++)
+                        if (stepText[i].text.trim().isNotEmpty)
+                          MrcStep(
+                            id: 's${i + 1}',
+                            text: stepText[i].text.trim(),
+                            standard: stepStd[i].text.trim(),
+                          ),
+                    ];
                     _createPmsCheck(
                       mip: m,
                       seq: int.tryParse(seq.text.trim()) ?? 1,
@@ -5374,6 +5750,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       ein: ein.text.trim(),
                       periodicity: per,
                       estMinutes: int.tryParse(mins.text.trim()) ?? 0,
+                      steps: builtSteps,
                     );
                     Navigator.pop(ctx);
                   },
@@ -5389,23 +5766,56 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // --- Weekly schedule (PMS checks + active jobs assigned to days) ----------
 
-  Widget _scheduleHeader(int weekStart) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-    child: Row(
-      children: [
-        Text(
-          'Week of ${_shortDate(weekStart)}',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        const Spacer(),
-        if (_canManageSked)
-          const Text(
-            'drag onto a day · tap to assign',
-            style: TextStyle(color: Colors.grey, fontSize: 11),
+  Widget _scheduleHeader(int weekStart) {
+    final (ok, total) = _store.pmsCompliance(
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    final pct = total == 0 ? 100 : (ok * 100 / total).round();
+    final overdue = total - ok;
+    final color = pct >= 90
+        ? Colors.green
+        : (pct >= 70 ? Colors.orange : _duOrange);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'Week of ${_shortDate(weekStart)}',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  border: Border.all(color: color),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'PMS $pct%${overdue > 0 ? ' · $overdue overdue' : ''}',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
-      ],
-    ),
-  );
+          if (_canManageSked)
+            const Padding(
+              padding: EdgeInsets.only(top: 2),
+              child: Text(
+                'drag onto a day · tap to assign',
+                style: TextStyle(color: Colors.grey, fontSize: 11),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   /// A board section (the Unscheduled pool or one day). Doubles as a drop
   /// target: dropping an item here assigns it to [targetDayMs] (null = pool /
@@ -5557,7 +5967,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ].join('  ·  '),
         ),
         trailing: FilledButton.tonal(
-          onPressed: () => _accomplishCheck(check, forDayMs: dayMs),
+          onPressed: () => _openCompleteCheck(check, forDayMs: dayMs),
           style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
           child: const Text('Done'),
         ),

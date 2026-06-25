@@ -8,6 +8,7 @@ import 'package:grapheion/domain/casrep.dart';
 import 'package:grapheion/domain/chain.dart';
 import 'package:grapheion/domain/job.dart';
 import 'package:grapheion/domain/org.dart';
+import 'package:grapheion/domain/sked.dart';
 import 'package:grapheion/domain/watch.dart';
 import 'package:grapheion/mesh_store.dart';
 
@@ -460,6 +461,42 @@ void main() {
         remote: false,
       );
       expect(notes, isEmpty);
+    });
+  });
+
+  group('pmsCompliance', () {
+    PmsCheck mk(String id, Periodicity p, int? lastDays, {required int now}) {
+      const day = 86400000;
+      return PmsCheck(
+        id: id,
+        mip: 'M',
+        seq: 1,
+        title: id,
+        ein: '',
+        workcenter: 'CP01',
+        periodicity: p,
+        estMinutes: 0,
+        lastDoneMs: lastDays == null ? null : now - lastDays * day,
+        lastBy: '',
+        createdAtMs: now - 500 * day,
+        updatedAtMs: now,
+      );
+    }
+
+    test('counts not-overdue ÷ total; situational excluded', () {
+      final now = 1000 * 86400000;
+      store.pmsChecks['a'] = mk('a', Periodicity.weekly, 1, now: now); // ok
+      store.pmsChecks['b'] = mk('b', Periodicity.weekly, 30, now: now); // overdue
+      store.pmsChecks['c'] = mk('c', Periodicity.situational, null, now: now);
+      final (ok, total) = store.pmsCompliance(now);
+      expect(total, 2, reason: 'situational has no due date');
+      expect(ok, 1, reason: 'the 30-day-old weekly is overdue');
+    });
+
+    test('empty (no calendar checks) reads as 0 of 0', () {
+      final (ok, total) = store.pmsCompliance(1000 * 86400000);
+      expect(total, 0);
+      expect(ok, 0);
     });
   });
 }

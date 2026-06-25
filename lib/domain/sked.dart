@@ -117,6 +117,7 @@ class PmsCheck {
   List<int> doneDays; // day-start ms of every day it was accomplished
   String assignedTo; // person the WCS assigned ('' = unassigned)
   int? scheduledForMs; // WCS-assigned day (null = unplaced); daily = every day
+  List<MrcStep> steps; // the MRC procedure (empty = a simple sign-off check)
   final int createdAtMs;
   int updatedAtMs;
 
@@ -134,9 +135,11 @@ class PmsCheck {
     List<int>? doneDays,
     this.assignedTo = '',
     this.scheduledForMs,
+    List<MrcStep>? steps,
     required this.createdAtMs,
     required this.updatedAtMs,
-  }) : doneDays = doneDays ?? [];
+  }) : doneDays = doneDays ?? [],
+       steps = steps ?? [];
 
   factory PmsCheck.create({
     required String id,
@@ -148,6 +151,7 @@ class PmsCheck {
     required Periodicity periodicity,
     required int estMinutes,
     required int nowMs,
+    List<MrcStep>? steps,
   }) => PmsCheck(
     id: id,
     mip: mip,
@@ -159,6 +163,7 @@ class PmsCheck {
     estMinutes: estMinutes,
     lastDoneMs: null,
     lastBy: '',
+    steps: steps,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
   );
@@ -211,6 +216,7 @@ class PmsCheck {
     'doneDays': doneDays,
     'assignedTo': assignedTo,
     'scheduledForMs': scheduledForMs,
+    'steps': steps.map((s) => s.toJson()).toList(),
     'createdAtMs': createdAtMs,
     'updatedAtMs': updatedAtMs,
   };
@@ -232,7 +238,108 @@ class PmsCheck {
     doneDays: (j['doneDays'] as List?)?.map((e) => e as int).toList(),
     assignedTo: (j['assignedTo'] ?? '') as String,
     scheduledForMs: j['scheduledForMs'] as int?,
+    steps: (j['steps'] as List?)
+        ?.map((e) => MrcStep.fromJson(e as Map<String, dynamic>))
+        .toList(),
     createdAtMs: (j['createdAtMs'] ?? 0) as int,
     updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
   );
+}
+
+/// One step of an MRC procedure — what the maintainer does + the standard it
+/// must meet. Per-accomplishment outcomes are captured in [StepResult].
+class MrcStep {
+  final String id; // stable within the check
+  String text; // the procedure step
+  String standard; // standard / tolerance to meet ('' = none)
+
+  MrcStep({required this.id, this.text = '', this.standard = ''});
+
+  Map<String, dynamic> toJson() => {'id': id, 'text': text, 'standard': standard};
+
+  factory MrcStep.fromJson(Map<String, dynamic> j) => MrcStep(
+    id: j['id'] as String,
+    text: (j['text'] ?? '') as String,
+    standard: (j['standard'] ?? '') as String,
+  );
+}
+
+/// The outcome of one [MrcStep] during an accomplishment.
+class StepResult {
+  final String stepId;
+  bool sat; // SAT (meets standard) / UNSAT (a discrepancy)
+  String reading; // optional captured reading / note for this step
+
+  StepResult({required this.stepId, this.sat = true, this.reading = ''});
+
+  Map<String, dynamic> toJson() => {
+    'stepId': stepId,
+    'sat': sat,
+    'reading': reading,
+  };
+
+  factory StepResult.fromJson(Map<String, dynamic> j) => StepResult(
+    stepId: j['stepId'] as String,
+    sat: (j['sat'] ?? true) as bool,
+    reading: (j['reading'] ?? '') as String,
+  );
+}
+
+/// A signed accomplishment of an MRC on a given day: who performed it, the
+/// per-step results, and any discrepancy job spawned. One per (check, day).
+class PmsAccomplishment {
+  final String id; // makeId(checkId, dayMs)
+  final String checkId;
+  final int dayMs; // start-of-day it was performed
+  String by; // performer (the signature)
+  int atMs;
+  List<StepResult> results;
+  String note; // overall remarks
+  String jobId; // CSMP job spawned from a discrepancy ('' = none)
+  int updatedAtMs;
+
+  PmsAccomplishment({
+    required this.id,
+    required this.checkId,
+    required this.dayMs,
+    required this.by,
+    required this.atMs,
+    List<StepResult>? results,
+    this.note = '',
+    this.jobId = '',
+    required this.updatedAtMs,
+  }) : results = results ?? [];
+
+  static String makeId(String checkId, int dayMs) =>
+      '$checkId|${startOfDay(dayMs)}';
+
+  /// Any UNSAT step → the accomplishment found a discrepancy.
+  bool get hasDiscrepancy => results.any((r) => !r.sat);
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'checkId': checkId,
+    'dayMs': dayMs,
+    'by': by,
+    'atMs': atMs,
+    'results': results.map((r) => r.toJson()).toList(),
+    'note': note,
+    'jobId': jobId,
+    'updatedAtMs': updatedAtMs,
+  };
+
+  factory PmsAccomplishment.fromJson(Map<String, dynamic> j) =>
+      PmsAccomplishment(
+        id: j['id'] as String,
+        checkId: (j['checkId'] ?? '') as String,
+        dayMs: (j['dayMs'] ?? 0) as int,
+        by: (j['by'] ?? '') as String,
+        atMs: (j['atMs'] ?? 0) as int,
+        results: (j['results'] as List?)
+            ?.map((e) => StepResult.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        note: (j['note'] ?? '') as String,
+        jobId: (j['jobId'] ?? '') as String,
+        updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+      );
 }
