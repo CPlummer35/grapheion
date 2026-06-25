@@ -5842,14 +5842,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return ListView(
       children: [
         _scheduleHeader(weekStart),
-        if (checks.isEmpty && _canManageSked)
+        if (_canManageSked)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: OutlinedButton.icon(
               onPressed: _seedBicyclePms,
               icon: const Icon(Icons.pedal_bike),
-              label: const Text(
-                'No PMS checks yet — load example: Bicycle PMS',
+              label: Text(
+                checks.isEmpty
+                    ? 'No PMS checks yet — load example: Bicycle PMS'
+                    : 'Reload bicycle demo (refreshes procedure steps)',
               ),
             ),
           ),
