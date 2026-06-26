@@ -64,9 +64,14 @@ class Job {
     required String symptom,
     required int priority,
     required String originator,
+    Role originatorRole = Role.technician,
     required String workcenter,
     required int nowMs,
   }) {
+    // Start the ladder at the rung ABOVE the submitter (an LPO's job goes
+    // straight to the DIVO). If the submitter is already at/above the top, the
+    // job needs no approval and goes straight to execution.
+    final first = firstApproverAfter(originatorRole);
     return Job(
       id: id,
       title: title,
@@ -75,8 +80,8 @@ class Job {
       priority: priority,
       originator: originator,
       workcenter: workcenter,
-      phase: JobPhase.approval,
-      approver: kApprovalChain.first, // WCS
+      phase: first == null ? JobPhase.execution : JobPhase.approval,
+      approver: first ?? Role.technician, // execution → the tech works it
       returned: false,
       inWork: false,
       taRequested: false,

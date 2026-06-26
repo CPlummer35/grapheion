@@ -125,6 +125,19 @@ Role? nextInChain(Role current) {
   return kApprovalChain[i + 1];
 }
 
+/// The first approver ABOVE [originator] in the ladder — so a job starts at the
+/// rung above whoever submitted it, not always at the bottom. A technician
+/// starts at WCS; a WCS starts at LPO; an LPO starts at DIVO. Returns null when
+/// the originator already sits at/above the top rung (DIVO, or DH/3MC above the
+/// ladder) — the job needs no approval and goes straight to execution.
+Role? firstApproverAfter(Role originator) {
+  final i = kApprovalChain.indexOf(originator);
+  if (i < 0) {
+    return originator == Role.technician ? kApprovalChain.first : null;
+  }
+  return i + 1 < kApprovalChain.length ? kApprovalChain[i + 1] : null;
+}
+
 /// The owner one rung down from [current] — i.e. who a Return sends it back to.
 /// Returning from the first chain stage (WCS) sends it to the originating
 /// technician.

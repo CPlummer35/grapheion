@@ -22,8 +22,9 @@ in a compartment with no network still converge.
   **feature menu** that opens each feature **full-screen** (back returns to the
   menu). Content switches on tap — no horizontal swiping.
 - **Features**: **CSMP** (corrective), **SKED** (preventive + schedule),
-  **CASREP**, **Watchbills** (watch organization + PQS), **Connection** (the
-  mesh), plus "coming soon" stubs for **Supply, Training, Muster**.
+  **CASREP**, **Watchbills** (watch organization + PQS), **Duty Section**
+  (in-port duty + the watchbill approval chain), **Supply** (part requisitions),
+  **Connection** (the mesh), plus "coming soon" stubs for **Training, Muster**.
 
 ### Roles & visibility
 - Each device logs in as one role: Technician, Work Center Supervisor (WCS),
@@ -36,7 +37,9 @@ in a compartment with no network still converge.
 
 ### CSMP — corrective maintenance (the job approval chain)
 - A technician originates a job; it climbs the on-ship ladder **WCS → LPO →
-  DIVO** (Approve advances, Return kicks it back with a comment).
+  DIVO** (Approve advances, Return kicks it back with a comment). **The ladder
+  starts at the rung above the submitter** — an LPO's job goes straight to the
+  DIVO; a DIVO's needs no approval and goes straight to execution.
 - **TA (Technical Assistance)** — only the **DIVO** can request off-ship
   assistance, which connects the **Port Engineer**; the PE engages or declines.
   This is the only way the PE enters a job.
@@ -60,9 +63,24 @@ in a compartment with no network still converge.
   specific days; an **Unscheduled** pool holds what's not yet placed.
 - **Daily checks appear on every day** and are signed off **per day** — the dot
   reads 🟢 done · 🔴 missed · 🟠 upcoming for each day independently.
-- **Accomplish** records who and when; **the WCS assigns** a work-center member
-  to each task.
-- A one-tap **Bicycle PMS example** seeds a relatable, self-demonstrating
+- **Checklist MRCs + signed completion** — an MRC carries its **procedure steps**
+  (each with a standard); completing one walks the steps marking **SAT/UNSAT**
+  with a reading, then **signs** it. The accomplishment is recorded per check +
+  day, with the signer.
+- **Discrepancy → corrective work** — marking a step **UNSAT** raises a
+  **corrective CSMP job _and_ a linked Supply part request** in one flow.
+- **WCS spot-check** — a supervisor reviews signed work in a **Spot checks**
+  queue and **verifies** it or **kicks it back** with a reason (the performer
+  and supervisor are notified).
+- **PMS compliance %** — a live "in good standing ÷ total" pill on the SKED
+  header (the standard maintenance KPI), with an overdue count.
+- **Deferral** — defer a check (parts / ops / access) with a reason; it stops
+  reading overdue until the deferral lapses.
+- **Recurring auto-placement** — set a check to land on a chosen weekday every
+  week so the board fills itself; **situational (R)** checks carry a
+  **trigger/condition** ("when: pad < 1.5 mm").
+- **The WCS assigns** a work-center member to each task. A one-tap **Bicycle PMS
+  example** — with real procedure steps — seeds a relatable, self-demonstrating
   schedule (one MRC per periodicity + a situational one).
 
 ### CASREP
@@ -84,8 +102,35 @@ in a compartment with no network still converge.
 - **In-port watchbill** — pick a day + watch period (Mid…Evening, incl. dog
   watches); a row per station shows who's posted, drawing only from PQS-qualified
   people. A one-tap seed loads the default in-port stations + the SWO quals.
-- *Scaffolded, awaiting fidelity:* PQS **line-items** (100/200/300), **duty-
-  section** rotation, and the **underway** bill are the next depth passes.
+- *Scaffolded, awaiting fidelity:* PQS **line-items** (100/200/300) and the
+  **underway** bill are the next depth passes.
+
+### Duty Section — in-port duty + the watchbill approval chain
+- **Duty positions** are a second axis on top of a person's rank/role —
+  **Section Leader**, **CDO**, or watchstander — and they grant section-level
+  authority *additively* (a Section Leader who's also a divisional chief keeps
+  their role's access and gains the section's).
+- **Watchbill approval chain** — the Section Leader builds the section watchbill
+  and **submits it to the CDO** (a two-tap confirm), who **approves** or
+  **returns** it with a reason. Then, at the end of the duty day, the leader
+  **finalizes** it (logging events that occurred — fire, AT/FP, casualty…) and
+  the CDO approves again, which **records the watches** (everyone's watch counter
+  ticks) and drops the day into a **History** tab. A status chip shows the whole
+  section where the bill is (draft / in routing / approved / finalized), and each
+  transition notifies the right person.
+- **Night-watch fairness** — auto-fill balances who's stood the mids from the
+  signed watch history, not just head-count.
+
+### Supply — part requisitions
+- A worn part — often straight off a **PMS discrepancy** — becomes a requisition
+  that routes for approval before it's ordered: a work center **requests** it →
+  the **DIVO approves** (releases it to Supply) → **Supply orders** it (Supply's
+  approval _is_ the order) → **Received** → **Issued** back to the work center.
+  Either approver can **reject** with a reason.
+- **Order authority** is **LPO-and-above inside the Supply department** — a
+  supply tech or WCS can't order parts. Supply sees every request; everyone else
+  sees their own chain's. Each step notifies the right party, and a request
+  carries links back to the PMS check + corrective job for traceability.
 
 ### Demo feedback
 - Anyone trying the demo can tap the **feedback** button in the app bar on any
@@ -114,8 +159,10 @@ Grapheion is a Flutter app that depends on the `peat_flutter` package (the mesh
 binding over the `peat-ffi` native library). It does not run its own server —
 the device mesh *is* the backend. Everything syncs as peat documents: **jobs**,
 the **audit log**, **accounts**, the **org chart** (departments / divisions /
-work centers), **CASREPs**, **PMS checks**, **qualifications + PQS progress**,
-the **watchbill**, and **presence** — over **two transports in parallel**:
+work centers), **CASREPs**, **PMS checks + signed accomplishments**, **supply
+requests**, **qualifications + PQS progress**, the **watchbill + its approval
+routing + duty-day events**, and **presence** — over **two transports in
+parallel**:
 
 - **Iroh/QUIC** — Wi-Fi/mDNS on the LAN, plus the n0 relay for the off-ship Port
   Engineer. Key-gated by peat's formation handshake.
@@ -130,10 +177,12 @@ state.
 Synced state and the inbound-apply / visibility / notification logic live in a
 pure, node-free **`MeshStore`** (`lib/mesh_store.dart`); the widget reads it
 through thin getters and delegates to it. That keeps the logic unit-testable: a
-host-run **`flutter test`** suite (~88 tests, sub-second — job lifecycle,
-role-scoped visibility, CASREP categories, the PMS periodicity/MIP-MRC/schedule
-model, serialization, and a UI smoke test) is the regression net. Run it before
-changes.
+host-run **`flutter test`** suite (~145 tests, sub-second — the job lifecycle +
+rung-skipping ladder, role-scoped visibility, CASREP categories, the PMS
+periodicity/MIP-MRC/schedule model, MRC steps + signed accomplishments +
+spot-check + compliance, the duty-position axis + watchbill approval chain, the
+supply requisition chain, last-write-wins sync guards, serialization, and a UI
+smoke test) is the regression net. Run it before changes.
 
 Repo layout this project expects (siblings under one parent):
 
@@ -193,23 +242,26 @@ appears on the other over Bluetooth.
 ## Status
 
 Proof-of-concept, running on **macOS, iOS, and Android**. Working: the full
-corrective-maintenance (CSMP) job lifecycle, preventive PMS (SKED) with the
-drag-and-drop weekly schedule, CASREP-from-priority, the in-port watchbill +
-PQS qualification tree (incl. SWO prerequisites), in-app demo feedback over the
-mesh, org-scoped visibility, QR-gated join, role switching, notifications, a
-dual Iroh + BLE transport (BLE AES-256-GCM encrypted, both transports
-formation-key gated), and an ~88-test host-run regression suite.
+corrective-maintenance (CSMP) job lifecycle with a rung-skipping approval ladder,
+preventive PMS (SKED) with the drag-and-drop weekly schedule, **checklist MRCs +
+signed completion + WCS spot-check + compliance % + deferral + auto-placement**,
+**PMS-discrepancy → corrective job + Supply part request**, the **Supply
+requisition chain** (DIVO → Supply, LPO-and-above gated), the **Duty Section
+watchbill approval chain** (Section Leader → CDO, with finalize/record + history),
+CASREP-from-priority, the in-port watchbill + PQS qualification tree (incl. SWO
+prerequisites), in-app demo feedback over the mesh, org-scoped visibility,
+QR-gated join, role switching, notifications, a dual Iroh + BLE transport (BLE
+AES-256-GCM encrypted, both transports formation-key gated), and an ~145-test
+host-run regression suite.
 
 Not done / not for operational use:
 
 - **Role authority is modeled but not enforced** — the audit log records who did
-  what, but the UI doesn't yet prevent the wrong role from acting (gating is
-  cooperative).
-- **PMS spot-check / verification sign-off** isn't built — accomplishment is a
-  single action today (no WCS spot-check loop yet).
-- **PQS line-items (100/200/300), duty-section rotation, and the underway bill**
-  are scaffolded but not yet built (awaiting the real SWO PQS structure).
-- **Supply, Training, Muster** are navigation stubs ("coming soon").
+  what, and the approval/order gates are checked, but the UI is still largely
+  cooperative (it doesn't hard-stop every wrong-role action).
+- **PQS line-items (100/200/300) and the underway bill** are scaffolded but not
+  yet built (awaiting the real SWO PQS structure).
+- **Training, Muster** are navigation stubs ("coming soon").
 - The CASREP **release chain** (DIVO → DH → XO → CO) is deferred (it crosses into
   classified territory); CASREP is wired to jobs only for now.
 - The off-ship Port Engineer is reached over the **relay**, but the QR join

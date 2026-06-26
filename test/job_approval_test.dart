@@ -26,6 +26,29 @@ void main() {
       expect(j.inWork, isFalse);
       expect(j.taRequested, isFalse);
     });
+
+    Job by(Role r) => Job.originate(
+      id: 'J',
+      title: 't',
+      ein: 'e',
+      symptom: 's',
+      priority: 2,
+      originator: 'X',
+      originatorRole: r,
+      workcenter: 'CP01',
+      nowMs: 1,
+    );
+
+    test('the ladder starts at the rung above the submitter', () {
+      expect(by(Role.technician).approver, Role.wcs);
+      expect(by(Role.wcs).approver, Role.lpo);
+      expect(by(Role.lpo).approver, Role.divo, reason: 'LPO → straight to DIVO');
+    });
+
+    test('a DIVO (or above) submission needs no approval → execution', () {
+      expect(by(Role.divo).phase, JobPhase.execution);
+      expect(by(Role.dh).phase, JobPhase.execution);
+    });
   });
 
   group('approve', () {
@@ -85,6 +108,13 @@ void main() {
       expect(nextInChain(Role.wcs), Role.lpo);
       expect(nextInChain(Role.lpo), Role.divo);
       expect(nextInChain(Role.divo), isNull);
+    });
+    test('firstApproverAfter starts above the submitter', () {
+      expect(firstApproverAfter(Role.technician), Role.wcs);
+      expect(firstApproverAfter(Role.wcs), Role.lpo);
+      expect(firstApproverAfter(Role.lpo), Role.divo);
+      expect(firstApproverAfter(Role.divo), isNull, reason: 'top of the ladder');
+      expect(firstApproverAfter(Role.dh), isNull, reason: 'above the ladder');
     });
   });
 }

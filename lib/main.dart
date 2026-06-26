@@ -3825,6 +3825,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   symptom: symptom,
                   priority: priority,
                   originator: _name,
+                  originatorRole: _role ?? Role.technician,
                   workcenter: c.workcenter,
                   nowMs: now,
                 );
@@ -4064,6 +4065,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       symptom: symptom,
       priority: priority,
       originator: _name,
+      originatorRole: _role ?? Role.technician,
       workcenter: _workcenter,
       nowMs: now,
     );
