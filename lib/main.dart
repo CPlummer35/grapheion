@@ -3556,6 +3556,38 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool get _canManageSked =>
       _role != null && _role != Role.technician && _role != Role.portEngineer;
 
+  /// True when the org is set up but the signed-in account isn't placed in a
+  /// work center — SKED/CSMP are work-center scoped, so they have nothing to show.
+  bool get _unassignedToUnit {
+    if (_org.workcenters.isEmpty) return false; // org not seeded — not this case
+    final wc = _workcenter;
+    return wc.isEmpty || !_org.workcenters.containsKey(wc);
+  }
+
+  Widget _notAssignedNotice() => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.person_off_outlined, size: 48, color: Colors.grey),
+          const SizedBox(height: 12),
+          Text(
+            'You are not assigned to a division',
+            style: Theme.of(context).textTheme.titleMedium,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Ask an admin to assign you to a work center.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey),
+          ),
+        ],
+      ),
+    ),
+  );
+
   /// Seed a relatable example — a bicycle (EIN BIKE-1) with a spread of PMS
   /// checks across periodicities + statuses — at the signed-in work center.
   /// Stable ids, so re-loading just refreshes them.
@@ -4473,8 +4505,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     // Dispatch on the feature label so the order of _features can change freely.
     switch (_navFeatures[_feature].$2) {
       case 'CSMP':
+        if (_unassignedToUnit) return _notAssignedNotice();
         return _csmpView(mine, pending, active, completed);
       case 'SKED':
+        if (_unassignedToUnit) return _notAssignedNotice();
         return _skedPage(active);
       case 'CASREP':
         return _casrepPage();
