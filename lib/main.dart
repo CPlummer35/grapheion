@@ -7631,7 +7631,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     switch (job.phase) {
       case JobPhase.approval:
-        if (job.approver == _role) {
+        if (job.approver == _role || _isKratos) {
           final next = nextInChain(job.approver);
           rows.add(
             approveReturn(
@@ -7639,7 +7639,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               () => _promptReturn(ctx, job),
             ),
           );
-          if (_role == Role.divo) {
+          if (_role == Role.divo || _isKratos) {
             rows.add(const SizedBox(height: 8));
             rows.add(
               wide('Request off-ship assistance (TA)', Icons.sailing, () {
@@ -7651,7 +7651,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
         break;
       case JobPhase.ta:
-        if (_role == Role.portEngineer) {
+        if (_role == Role.portEngineer || _isKratos) {
           rows.add(
             Row(
               children: [
@@ -7682,7 +7682,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
         break;
       case JobPhase.execution:
-        if (_role == Role.technician) {
+        if (_role == Role.technician || _isKratos) {
           rows.add(
             wide(
               job.inWork ? 'Mark complete' : 'Start work',
@@ -7694,7 +7694,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
           );
         }
-        if (_role == Role.divo && !job.taRequested) {
+        if ((_role == Role.divo || _isKratos) && !job.taRequested) {
           rows.add(const SizedBox(height: 8));
           rows.add(
             wide('Request off-ship assistance (TA)', Icons.sailing, () {
@@ -7705,7 +7705,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
         break;
       case JobPhase.closeout:
-        if (job.approver == _role) {
+        if (job.approver == _role || _isKratos) {
           final next = nextInChain(job.approver);
           rows.add(
             Row(
