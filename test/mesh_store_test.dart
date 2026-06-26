@@ -9,6 +9,7 @@ import 'package:grapheion/domain/chain.dart';
 import 'package:grapheion/domain/job.dart';
 import 'package:grapheion/domain/org.dart';
 import 'package:grapheion/domain/sked.dart';
+import 'package:grapheion/domain/supply.dart';
 import 'package:grapheion/domain/watch.dart';
 import 'package:grapheion/mesh_store.dart';
 
@@ -585,6 +586,67 @@ void main() {
         reason: 'older updatedAtMs must not overwrite',
       );
       expect(store.pmsChecks['c']!.updatedAtMs, 100);
+    });
+  });
+
+  group('supply', () {
+    SupplyRequest req(SupplyStatus s, {String by = 'tech', int updated = 1}) =>
+        SupplyRequest(
+          id: 'REQ-1',
+          part: 'chain',
+          workcenter: 'CP01',
+          requestedBy: by,
+          status: s,
+          createdAtMs: 1,
+          updatedAtMs: updated,
+        );
+
+    test('order authority: Kratos yes, a plain technician no', () {
+      store.account = _acct('k', 'K', Role.kratos);
+      expect(store.canProcessSupply, isTrue);
+      store.account = _acct('t', 'T', Role.technician);
+      expect(store.canProcessSupply, isFalse, reason: 'not in supply dept');
+    });
+
+    test('a DIVO is pinged on a new request (not self-pinged)', () {
+      store.account = _acct('divo', 'DIVO', Role.divo);
+      store.applyDoc(
+        kSupply,
+        'REQ-1',
+        jsonEncode(req(SupplyStatus.requested, by: 'tech').toJson()),
+        remote: true,
+      );
+      expect(notes, isNotEmpty);
+    });
+
+    test('the requester hears when the part is ordered', () {
+      store.account = _acct('tech', 'Tech', Role.technician);
+      store.supplyRequests['REQ-1'] = req(SupplyStatus.divoApproved, by: 'Tech');
+      final before = notes.length;
+      store.applyDoc(
+        kSupply,
+        'REQ-1',
+        jsonEncode(req(SupplyStatus.ordered, by: 'Tech', updated: 2).toJson()),
+        remote: true,
+      );
+      expect(notes.length, greaterThan(before), reason: 'requester pinged');
+      expect(notes.last, contains('chain'));
+    });
+
+    test('supply apply is last-write-wins', () {
+      store.applyDoc(
+        kSupply,
+        'REQ-1',
+        jsonEncode(req(SupplyStatus.ordered, updated: 100).toJson()),
+        remote: true,
+      );
+      store.applyDoc(
+        kSupply,
+        'REQ-1',
+        jsonEncode(req(SupplyStatus.requested, updated: 50).toJson()),
+        remote: true,
+      );
+      expect(store.supplyRequests['REQ-1']!.status, SupplyStatus.ordered);
     });
   });
 }

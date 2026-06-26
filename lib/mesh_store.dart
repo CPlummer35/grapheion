@@ -17,6 +17,7 @@ import 'domain/feedback.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
 import 'domain/sked.dart';
+import 'domain/supply.dart';
 import 'domain/watch.dart';
 
 // Synced collection names (shared with the BLE/Iroh wiring in the widget).
@@ -30,6 +31,7 @@ const kAccounts = 'accounts';
 const kCasreps = 'casreps';
 const kPmsChecks = 'pmschecks'; // SKED / PMS checks
 const kPmsDone = 'pmsdone'; // signed MRC accomplishments (one per check + day)
+const kSupply = 'supply'; // supply requisitions (the DIVO→Supply approval chain)
 const kQualifications = 'qualifications'; // qual tree nodes (watch/knowledge/…)
 const kQuals = 'quals'; // PQS progress (person x qualification)
 const kEvolutions = 'evolutions'; // evolutions (role sets, e.g. In-Port Duty)
@@ -69,6 +71,7 @@ class MeshStore {
   final Map<String, Casrep> casreps = {};
   final Map<String, PmsCheck> pmsChecks = {};
   final Map<String, PmsAccomplishment> pmsDone = {};
+  final Map<String, SupplyRequest> supplyRequests = {};
   final Map<String, Qualification> qualifications = {};
   final Map<String, PersonQual> quals = {}; // keyed by PersonQual.makeId
   final Map<String, Evolution> evolutions = {};
@@ -157,6 +160,15 @@ class MeshStore {
         if (old == null || a.updatedAtMs >= old.updatedAtMs) {
           pmsDone[docId] = a; // LWW
           if (remote) _notifyForPms(old, a, peer);
+        }
+      } else if (coll == kSupply) {
+        final r = SupplyRequest.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        final old = supplyRequests[docId];
+        if (old == null || r.updatedAtMs >= old.updatedAtMs) {
+          supplyRequests[docId] = r; // LWW
+          if (remote) _notifyForSupply(old, r, peer);
         }
       } else if (coll == kQualifications) {
         qualifications[docId] = Qualification.fromJson(
@@ -449,6 +461,102 @@ class MeshStore {
     }
   }
 
+  // --- Supply requisitions --------------------------------------------------
+
+  /// Whether the signed-in person is in the Supply department.
+  bool get inSupplyDept {
+    final wc = org.workcenters[workcenter];
+    final div = wc == null ? null : org.divisions[wc.divisionId];
+    final dept = div == null ? null : org.departments[div.departmentId];
+    return dept != null && dept.name.toLowerCase().contains('supply');
+  }
+
+  /// May order/process supply requests: LPO-and-above inside the Supply
+  /// department (or Kratos). A supply tech / WCS cannot order parts.
+  bool get canProcessSupply {
+    if (role == Role.kratos) return true;
+    if (!inSupplyDept) return false;
+    return role == Role.lpo ||
+        role == Role.divo ||
+        role == Role.dh ||
+        role == Role.threeMC;
+  }
+
+  /// May give the DIVO release (the first approval before Supply).
+  bool get canApproveSupplyDivo => role == Role.divo || role == Role.kratos;
+
+  /// Visible if you process supply (Supply sees all requests), or it's within
+  /// your chain's org scope.
+  bool canSeeRequest(SupplyRequest r) {
+    if (canProcessSupply || role == Role.kratos) return true;
+    if (org.workcenters.isEmpty || role == null) return true;
+    return canSeeJob(
+      role: role!,
+      viewerWorkcenterId: workcenter,
+      jobWorkcenterId: r.workcenter,
+      jobHasTa: false,
+      org: org,
+    );
+  }
+
+  /// All supply requests the viewer can see, newest first.
+  List<SupplyRequest> visibleRequests() {
+    final out = supplyRequests.values.where(canSeeRequest).toList();
+    out.sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
+    return out;
+  }
+
+  /// Requests waiting on the signed-in person's action (DIVO release, or Supply
+  /// order) — drives the rail badge.
+  int pendingSupplyForMe() {
+    var n = 0;
+    for (final r in supplyRequests.values) {
+      if (!canSeeRequest(r)) continue;
+      if (r.status.awaitingDivo && canApproveSupplyDivo) {
+        n++;
+      } else if (r.status.awaitingSupply && canProcessSupply) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /// Supply pings (each device decides if it's the target): the DIVO hears a new
+  /// request; Supply hears a DIVO-released one; the requester hears the outcome.
+  void _notifyForSupply(SupplyRequest? old, SupplyRequest r, String? peer) {
+    if (account == null) return;
+    if (old != null && old.status == r.status) return; // only on a transition
+    final label = '${r.part}${r.qty > 1 ? ' ×${r.qty}' : ''}';
+    switch (r.status) {
+      case SupplyStatus.requested:
+        if (canApproveSupplyDivo && r.requestedBy != name) {
+          onNotify(
+            'Part request — DIVO approval',
+            '$label from ${r.workcenter}',
+            peer,
+          );
+        }
+      case SupplyStatus.divoApproved:
+        if (canProcessSupply) {
+          onNotify('Part request — at Supply', '$label (DIVO released)', peer);
+        }
+      case SupplyStatus.ordered:
+        if (r.requestedBy == name) onNotify('Part on order', label, peer);
+      case SupplyStatus.received:
+        if (r.requestedBy == name) onNotify('Part received', label, peer);
+      case SupplyStatus.issued:
+        if (r.requestedBy == name) onNotify('Part issued', label, peer);
+      case SupplyStatus.rejected:
+        if (r.requestedBy == name) {
+          onNotify(
+            'Part request rejected',
+            r.rejectReason.isEmpty ? label : r.rejectReason,
+            peer,
+          );
+        }
+    }
+  }
+
   /// PMS compliance at [nowMs]: of the calendar checks in scope, how many are
   /// NOT overdue — the standard "in good standing ÷ total" PM-health number.
   /// Situational (R) checks have no due date and are excluded. Optionally
@@ -625,6 +733,7 @@ class MeshStore {
     casreps.clear();
     pmsChecks.clear();
     pmsDone.clear();
+    supplyRequests.clear();
     qualifications.clear();
     quals.clear();
     evolutions.clear();

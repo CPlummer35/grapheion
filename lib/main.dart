@@ -35,6 +35,7 @@ import 'domain/job.dart';
 import 'domain/org.dart';
 import 'domain/schedule.dart';
 import 'domain/sked.dart';
+import 'domain/supply.dart';
 import 'domain/watch.dart';
 import 'mesh_store.dart';
 import 'notifications.dart';
@@ -677,6 +678,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           for (final a in _store.pmsDone.values) {
             _bleBroadcast(kPmsDone, a.id, jsonEncode(a.toJson()));
           }
+          for (final r in _store.supplyRequests.values) {
+            _bleBroadcast(kSupply, r.id, jsonEncode(r.toJson()));
+          }
           for (final s in _store.qualifications.values) {
             _bleBroadcast(kQualifications, s.id, jsonEncode(s.toJson()));
           }
@@ -1153,6 +1157,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       kCasreps,
       kPmsChecks,
       kPmsDone,
+      kSupply,
       kQualifications,
       kQuals,
       kEvolutions,
@@ -3797,18 +3802,218 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 a.jobId = job.id;
                 _saveAccomplishment(a);
                 Navigator.pop(ctx);
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Raised ${job.id} for the discrepancy'),
-                    ),
-                  );
-                }
+                // "Both" flow: chain to the part request, linked to job + check.
+                _promptRequestPart(
+                  ein: c.ein,
+                  reason: 'PMS ${c.mip} ${c.mrcCode}: ${unsat.join('; ')}',
+                  priority: priority,
+                  checkId: c.id,
+                  jobId: job.id,
+                );
               },
-              child: const Text('Create job'),
+              child: const Text('Create job + part'),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // --- Supply requisitions ---------------------------------------------------
+
+  void _saveSupplyRequest(SupplyRequest r) {
+    r.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+    final json = jsonEncode(r.toJson());
+    _store.supplyRequests[r.id] = r;
+    _node!.putRaw(kSupply, r.id, json);
+    _bleBroadcast(kSupply, r.id, json);
+    if (mounted) setState(() {});
+  }
+
+  SupplyRequest _createSupplyRequest({
+    required String part,
+    String nsn = '',
+    int qty = 1,
+    String ein = '',
+    String reason = '',
+    int priority = 3,
+    String checkId = '',
+    String jobId = '',
+  }) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final r = SupplyRequest(
+      id: SupplyRequest.makeId(now),
+      part: part,
+      nsn: nsn,
+      qty: qty,
+      ein: ein,
+      workcenter: _workcenter,
+      requestedBy: _name,
+      reason: reason,
+      priority: priority,
+      checkId: checkId,
+      jobId: jobId,
+      createdAtMs: now,
+      updatedAtMs: now,
+    );
+    _saveSupplyRequest(r);
+    return r;
+  }
+
+  void _divoApproveRequest(SupplyRequest r) {
+    r
+      ..status = SupplyStatus.divoApproved
+      ..divoBy = _name;
+    _saveSupplyRequest(r);
+  }
+
+  void _supplyOrderRequest(SupplyRequest r) {
+    r
+      ..status = SupplyStatus.ordered
+      ..orderedBy = _name;
+    _saveSupplyRequest(r);
+  }
+
+  void _receiveRequest(SupplyRequest r) {
+    r.status = SupplyStatus.received;
+    _saveSupplyRequest(r);
+  }
+
+  void _issueRequest(SupplyRequest r) {
+    r.status = SupplyStatus.issued;
+    _saveSupplyRequest(r);
+  }
+
+  void _rejectRequest(SupplyRequest r, String note) {
+    r
+      ..status = SupplyStatus.rejected
+      ..rejectedBy = _name
+      ..rejectReason = note;
+    _saveSupplyRequest(r);
+  }
+
+  /// Open a part-request form (optionally pre-filled from a PMS check / job).
+  void _promptRequestPart({
+    String prefillPart = '',
+    String ein = '',
+    String reason = '',
+    int priority = 3,
+    String checkId = '',
+    String jobId = '',
+  }) {
+    final partCtrl = TextEditingController(text: prefillPart);
+    final nsnCtrl = TextEditingController();
+    final qtyCtrl = TextEditingController(text: '1');
+    var pri = priority;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Request part from supply'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: partCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Part',
+                    hintText: 'e.g. Bicycle chain',
+                  ),
+                ),
+                TextField(
+                  controller: nsnCtrl,
+                  decoration: const InputDecoration(labelText: 'NSN (optional)'),
+                ),
+                TextField(
+                  controller: qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Qty'),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<int>(
+                  initialValue: pri,
+                  decoration: const InputDecoration(labelText: 'Priority'),
+                  items: const [
+                    DropdownMenuItem(value: 1, child: Text('1 — highest')),
+                    DropdownMenuItem(value: 2, child: Text('2')),
+                    DropdownMenuItem(value: 3, child: Text('3')),
+                    DropdownMenuItem(value: 4, child: Text('4 — routine')),
+                  ],
+                  onChanged: (v) => setS(() => pri = v ?? 3),
+                ),
+                if (reason.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Reason: $reason',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final part = partCtrl.text.trim();
+                if (part.isEmpty) return;
+                final r = _createSupplyRequest(
+                  part: part,
+                  nsn: nsnCtrl.text.trim(),
+                  qty: int.tryParse(qtyCtrl.text.trim()) ?? 1,
+                  ein: ein,
+                  reason: reason,
+                  priority: pri,
+                  checkId: checkId,
+                  jobId: jobId,
+                );
+                Navigator.pop(ctx);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Requested ${r.part} — ${r.id}')),
+                  );
+                }
+              },
+              child: const Text('Submit request'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _promptRejectRequest(SupplyRequest r) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject request'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: 'Reason'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _rejectRequest(r, ctrl.text.trim());
+            },
+            child: const Text('Reject'),
+          ),
+        ],
       ),
     );
   }
@@ -4286,11 +4491,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       case 'Feedback':
         return _feedbackPage();
       case 'Supply':
-        return _stubPage(
-          Icons.inventory_2,
-          'Supply',
-          'Parts ordering, NSN lookup, requisition status.',
-        );
+        return _supplyPage();
       case 'Training':
         return _stubPage(
           Icons.school,
@@ -4304,6 +4505,191 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           'Personnel accountability + muster.',
         );
     }
+  }
+
+  Color _supplyStatusColor(SupplyStatus s) => switch (s) {
+    SupplyStatus.requested => Colors.orange,
+    SupplyStatus.divoApproved => Colors.blue,
+    SupplyStatus.ordered => Colors.blue,
+    SupplyStatus.received => Colors.teal,
+    SupplyStatus.issued => Colors.green,
+    SupplyStatus.rejected => _duOrange,
+  };
+
+  /// Supply requisitions: a New-request button + the visible requests, each with
+  /// the action available to the viewer (DIVO release, Supply order/receive/issue).
+  Widget _supplyPage() {
+    final requests = _store.visibleRequests();
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(
+            children: [
+              Text(
+                'Supply requests',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const Spacer(),
+              FilledButton.tonalIcon(
+                onPressed: () => _promptRequestPart(),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('New request'),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: requests.isEmpty
+              ? const Center(
+                  child: Text(
+                    'No supply requests yet.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  children: [for (final r in requests) _supplyRequestCard(r)],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _supplyRequestCard(SupplyRequest r) {
+    final actions = <Widget>[];
+    if (r.status.awaitingDivo && _store.canApproveSupplyDivo) {
+      actions.add(
+        FilledButton.icon(
+          onPressed: () => _divoApproveRequest(r),
+          icon: const Icon(Icons.check, size: 18),
+          label: const Text('Approve → supply'),
+        ),
+      );
+      actions.add(
+        OutlinedButton.icon(
+          onPressed: () => _promptRejectRequest(r),
+          icon: const Icon(Icons.close, size: 18),
+          label: const Text('Reject'),
+        ),
+      );
+    } else if (r.status.awaitingSupply && _store.canProcessSupply) {
+      actions.add(
+        FilledButton.icon(
+          onPressed: () => _supplyOrderRequest(r),
+          icon: const Icon(Icons.shopping_cart, size: 18),
+          label: const Text('Order'),
+        ),
+      );
+      actions.add(
+        OutlinedButton.icon(
+          onPressed: () => _promptRejectRequest(r),
+          icon: const Icon(Icons.close, size: 18),
+          label: const Text('Reject'),
+        ),
+      );
+    } else if (r.status == SupplyStatus.ordered && _store.canProcessSupply) {
+      actions.add(
+        FilledButton.icon(
+          onPressed: () => _receiveRequest(r),
+          icon: const Icon(Icons.inventory, size: 18),
+          label: const Text('Mark received'),
+        ),
+      );
+    } else if (r.status == SupplyStatus.received && _store.canProcessSupply) {
+      actions.add(
+        FilledButton.icon(
+          onPressed: () => _issueRequest(r),
+          icon: const Icon(Icons.outbox, size: 18),
+          label: const Text('Issue to WC'),
+        ),
+      );
+    }
+    final color = _supplyStatusColor(r.status);
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${r.part}${r.qty > 1 ? '  ×${r.qty}' : ''}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: color),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    r.status.label,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              [
+                r.id,
+                'pri ${r.priority}',
+                if (r.ein.isNotEmpty) r.ein,
+                if (r.nsn.isNotEmpty) 'NSN ${r.nsn}',
+                'WC ${r.workcenter}',
+                'by ${r.requestedBy}',
+              ].join('  ·  '),
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            if (r.reason.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(r.reason, style: const TextStyle(fontSize: 13)),
+              ),
+            if (r.jobId.isNotEmpty || r.checkId.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'linked: ${[if (r.jobId.isNotEmpty) r.jobId, if (r.checkId.isNotEmpty) 'PMS check'].join(' · ')}',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ),
+            if (r.divoBy.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'DIVO ${r.divoBy}'
+                  '${r.orderedBy.isNotEmpty ? ' · ordered by ${r.orderedBy}' : ''}',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ),
+            if (r.rejectReason.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Rejected by ${r.rejectedBy}: ${r.rejectReason}',
+                  style: TextStyle(fontSize: 12, color: _duOrange),
+                ),
+              ),
+            if (actions.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Wrap(spacing: 8, runSpacing: 4, children: actions),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// CSMP: the corrective-maintenance views as tap-only sub-tabs (no swipe).
