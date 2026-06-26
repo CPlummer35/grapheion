@@ -144,9 +144,11 @@ class MeshStore {
           jsonDecode(raw) as Map<String, dynamic>,
         );
       } else if (coll == kPmsChecks) {
-        pmsChecks[docId] = PmsCheck.fromJson(
-          jsonDecode(raw) as Map<String, dynamic>,
-        );
+        final c = PmsCheck.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final old = pmsChecks[docId];
+        if (old == null || c.updatedAtMs >= old.updatedAtMs) {
+          pmsChecks[docId] = c; // LWW — a stale rebroadcast can't revert it
+        }
       } else if (coll == kPmsDone) {
         final a = PmsAccomplishment.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,

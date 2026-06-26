@@ -548,4 +548,43 @@ void main() {
       expect(notes.last, contains('redo it'));
     });
   });
+
+  group('pmschecks LWW', () {
+    PmsCheck c(String title, int updated) => PmsCheck(
+      id: 'c',
+      mip: 'M',
+      seq: 1,
+      title: title,
+      ein: '',
+      workcenter: 'CP01',
+      periodicity: Periodicity.weekly,
+      estMinutes: 0,
+      lastDoneMs: null,
+      lastBy: '',
+      createdAtMs: 0,
+      updatedAtMs: updated,
+    );
+
+    test('a stale rebroadcast cannot revert a fresher check (reload guard)', () {
+      store.applyDoc(
+        kPmsChecks,
+        'c',
+        jsonEncode(c('NEW', 100).toJson()),
+        remote: true,
+      );
+      expect(store.pmsChecks['c']!.title, 'NEW');
+      store.applyDoc(
+        kPmsChecks,
+        'c',
+        jsonEncode(c('OLD', 50).toJson()),
+        remote: true,
+      );
+      expect(
+        store.pmsChecks['c']!.title,
+        'NEW',
+        reason: 'older updatedAtMs must not overwrite',
+      );
+      expect(store.pmsChecks['c']!.updatedAtMs, 100);
+    });
+  });
 }
