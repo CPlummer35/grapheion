@@ -6340,7 +6340,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         trailing: FilledButton.tonal(
           onPressed: () => _openCompleteCheck(check, forDayMs: dayMs),
           style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
-          child: const Text('Done'),
+          child: const Text('Start'),
         ),
         onTap: _canManageSked ? () => _openScheduleAssign(check: check) : null,
       );
