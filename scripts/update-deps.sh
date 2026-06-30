@@ -1,41 +1,53 @@
 #!/usr/bin/env bash
-# Keep grapheion's peat dependencies current — LOCAL-SOURCE build model.
-# Run before a build session (or weekly).
+# Keep grapheion's peat dependencies current — PUBLISHED-CRATE build model
+# (graduated 2026-06-30; replaced the old local-source build).
 #
-# How grapheion builds (as of 2026-06-24): it compiles `peat-ffi` DIRECTLY from
-# your ../peat checkout, via peat-flutter's `feat/reconnect-supervisor-wiring`
-# branch build scripts. So "stay current" = fast-forward ../peat to upstream
-# main. peat-flutter intentionally STAYS on its build branch — upstream
-# peat-flutter `main` switched to a published-crate `rust/` wrapper that does
-# NOT yet run on iOS for grapheion (the app crashes on launch), so we do not
-# track it here. Revisit graduating to the published crate once that iOS wrapper
-# issue is diagnosed + fixed.
+# grapheion path-depends on the sibling ../peat-flutter. On `main`, peat-flutter
+# builds peat-ffi from the published crates.io `peat-ffi` crate via its `rust/`
+# wrapper (rust/Cargo.toml pins the exact version). So "stay current" =
+# fast-forward both siblings to upstream main + rebuild the plugin's native FFI
+# libs (the macOS .dylib / iOS .xcframework / Android jniLibs that link into the
+# app). The vendored BLE frameworks in grapheion's ios/+macos/ (PeatAppleFFI /
+# PeatBtle) are a SEPARATE symbol namespace and stay as-is.
+#
+# Run before a build session (or weekly), then RUN-verify on a device after.
 set -euo pipefail
 
 GRAPHEION="$(cd "$(dirname "$0")/.." && pwd)"
-PEAT="$GRAPHEION/../peat"                     # the peat-ffi SOURCE grapheion compiles
-PEAT_FLUTTER="$GRAPHEION/../peat-flutter"     # Dart bindings + build scripts (build branch)
+PEAT="$GRAPHEION/../peat"                  # source reference + where upstream PRs branch
+PEAT_FLUTTER="$GRAPHEION/../peat-flutter"  # the published-crate plugin we build against
 
-echo "==> peat (peat-ffi source grapheion compiles)"
-if [ -d "$PEAT/.git" ]; then
-  git -C "$PEAT" fetch origin --quiet
-  [ "$(git -C "$PEAT" branch --show-current)" = "main" ] || git -C "$PEAT" checkout main --quiet
-  if git -C "$PEAT" merge --ff-only origin/main >/dev/null 2>&1; then
-    echo "   ✓ $(git -C "$PEAT" rev-parse --short HEAD) (current with origin/main)"
+ff() { # <dir> <label>
+  local d="$1" label="$2"
+  if [ ! -d "$d/.git" ]; then echo "   ⚠ $label not found ($d)"; return; fi
+  git -C "$d" fetch origin --quiet
+  [ "$(git -C "$d" branch --show-current)" = "main" ] || git -C "$d" checkout main --quiet
+  if git -C "$d" merge --ff-only origin/main >/dev/null 2>&1; then
+    echo "   ✓ $label $(git -C "$d" rev-parse --short HEAD)"
   else
-    echo "   ⚠ couldn't fast-forward (local commits / dirty tree) — resolve manually:"
-    git -C "$PEAT" status -sb | head -3
+    echo "   ⚠ $label couldn't fast-forward (local commits / dirty tree):"
+    git -C "$d" status -sb | head -3
   fi
-else
-  echo "   ⚠ ../peat not found — skipping"
-fi
+}
 
-echo "==> peat-flutter stays on its build branch: $(git -C "$PEAT_FLUTTER" branch --show-current 2>/dev/null || echo '?')"
-echo "   (NOT switched to main: its published-crate wrapper crashes on iOS for grapheion — revisit later)"
+echo "==> peat-flutter (the published-crate plugin grapheion builds against)"
+ff "$PEAT_FLUTTER" "peat-flutter"
+echo "==> peat (source reference + where upstream PRs branch from)"
+ff "$PEAT" "peat"
+
+echo "==> rebuild the plugin's native FFI libs from the rust/ wrapper (macOS + iOS)"
+echo "    (Android jniLibs rebuild automatically during the app's gradle build)"
+if ( cd "$PEAT_FLUTTER" && bash macos/build-rust.sh && bash ios/build-rust.sh ); then
+  echo "   ✓ libpeat_ffi.dylib + PeatFFI.xcframework rebuilt"
+else
+  echo "   ⚠ native build failed — review above"; exit 1
+fi
 
 echo "==> grapheion: flutter pub get + analyze (smoke check)"
 if ( cd "$GRAPHEION" && flutter pub get && flutter analyze lib/ ); then
-  echo "✓ deps current + grapheion analyzes clean — safe to build."
+  echo "✓ deps current + analyzes clean."
+  echo "  Rebuild (flutter clean first), then RUN-verify the node comes up"
+  echo "  (look for 'create_node' in the launch log) on a device before trusting."
 else
   echo "⚠ analyze found issues — a dep update may have shifted an API. Review above."
   exit 1
