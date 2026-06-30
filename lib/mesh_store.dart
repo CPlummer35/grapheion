@@ -506,6 +506,16 @@ class MeshStore {
     return out;
   }
 
+  /// Supply requests linked to a job (via jobId), newest first.
+  List<SupplyRequest> requestsForJob(String jobId) {
+    if (jobId.isEmpty) return const [];
+    final out = supplyRequests.values
+        .where((r) => r.jobId == jobId)
+        .toList();
+    out.sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
+    return out;
+  }
+
   /// Requests waiting on the signed-in person's action (DIVO release, or Supply
   /// order) — drives the rail badge.
   int pendingSupplyForMe() {

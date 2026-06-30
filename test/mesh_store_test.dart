@@ -633,6 +633,22 @@ void main() {
       expect(notes.last, contains('chain'));
     });
 
+    test('requestsForJob links parts to their job', () {
+      SupplyRequest r(String id, String job) => SupplyRequest(
+        id: id,
+        part: id,
+        workcenter: 'CP01',
+        requestedBy: 'x',
+        jobId: job,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      );
+      store.supplyRequests['REQ-1'] = r('REQ-1', 'JOB-9');
+      store.supplyRequests['REQ-2'] = r('REQ-2', 'JOB-OTHER');
+      expect(store.requestsForJob('JOB-9').map((x) => x.id), ['REQ-1']);
+      expect(store.requestsForJob(''), isEmpty);
+    });
+
     test('supply apply is last-write-wins', () {
       store.applyDoc(
         kSupply,

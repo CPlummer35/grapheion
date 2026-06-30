@@ -3907,6 +3907,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _saveSupplyRequest(r);
   }
 
+  /// Order a part: pick an expected delivery date, then mark it on order.
+  Future<void> _promptOrder(SupplyRequest r) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now.add(const Duration(days: 7)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+      helpText: 'Expected delivery date',
+    );
+    if (picked == null) return; // cancelled — don't order
+    r.etaMs = picked.millisecondsSinceEpoch;
+    _supplyOrderRequest(r);
+  }
+
   void _receiveRequest(SupplyRequest r) {
     r.status = SupplyStatus.received;
     _saveSupplyRequest(r);
@@ -4613,7 +4628,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } else if (r.status.awaitingSupply && _store.canProcessSupply) {
       actions.add(
         FilledButton.icon(
-          onPressed: () => _supplyOrderRequest(r),
+          onPressed: () => _promptOrder(r),
           icon: const Icon(Icons.shopping_cart, size: 18),
           label: const Text('Order'),
         ),
@@ -4707,6 +4722,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   'DIVO ${r.divoBy}'
                   '${r.orderedBy.isNotEmpty ? ' · ordered by ${r.orderedBy}' : ''}',
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ),
+            if (r.etaMs != null && r.status != SupplyStatus.issued)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Expected delivery ${_shortDate(r.etaMs!)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.teal,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             if (r.rejectReason.isNotEmpty)
@@ -7653,6 +7680,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 8),
               if (job.symptom.isNotEmpty) Text(job.symptom),
+              ..._jobPartsSection(job),
               const Divider(height: 24),
               Text(
                 'Chain of custody',
@@ -7666,6 +7694,56 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         );
       },
     );
+  }
+
+  /// The parts (supply requests) linked to a job + their delivery status, for
+  /// the job detail sheet. Empty when nothing's been requested for the job.
+  List<Widget> _jobPartsSection(Job job) {
+    final parts = _store.requestsForJob(job.id);
+    if (parts.isEmpty) return const [];
+    return [
+      const Divider(height: 24),
+      Text('Parts', style: Theme.of(context).textTheme.titleSmall),
+      const SizedBox(height: 4),
+      for (final r in parts)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.inventory_2_outlined,
+                size: 16,
+                color: _supplyStatusColor(r.status),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${r.part}${r.qty > 1 ? '  ×${r.qty}' : ''}'
+                      '  ·  ${r.status.label}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: _supplyStatusColor(r.status),
+                      ),
+                    ),
+                    Text(
+                      r.etaMs != null && r.status != SupplyStatus.issued
+                          ? 'expected delivery ${_shortDate(r.etaMs!)}'
+                          : (r.status == SupplyStatus.issued
+                                ? 'issued to the work center'
+                                : '${r.id} · pri ${r.priority}'),
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+    ];
   }
 
   /// Phase-aware action buttons for the job detail sheet.

@@ -34,8 +34,10 @@ void main() {
         requestedBy: 'MM2 Smith',
         reason: 'PMS BCYL/001-26 W-1: chain wear > 0.75%',
         priority: 2,
-        status: SupplyStatus.divoApproved,
+        status: SupplyStatus.ordered,
         divoBy: 'LT Jones',
+        orderedBy: 'SK1 Reed',
+        etaMs: 1700000,
         checkId: 'pms-bike-002',
         jobId: 'JOB-9',
         createdAtMs: 10,
@@ -44,8 +46,10 @@ void main() {
       final back = SupplyRequest.fromJson(r.toJson());
       expect(back.part, 'Bicycle chain');
       expect(back.qty, 2);
-      expect(back.status, SupplyStatus.divoApproved);
+      expect(back.status, SupplyStatus.ordered);
       expect(back.divoBy, 'LT Jones');
+      expect(back.orderedBy, 'SK1 Reed');
+      expect(back.etaMs, 1700000);
       expect(back.checkId, 'pms-bike-002');
       expect(back.jobId, 'JOB-9');
       expect(back.priority, 2);

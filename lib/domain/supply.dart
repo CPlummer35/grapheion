@@ -52,6 +52,7 @@ class SupplyRequest {
   SupplyStatus status;
   String divoBy; // DIVO who approved ('' = not yet)
   String orderedBy; // supply person who ordered/handled it ('' = none yet)
+  int? etaMs; // expected delivery date, set by Supply when ordering (null = TBD)
   String rejectedBy; // DIVO or supply who rejected ('' = not rejected)
   String rejectReason;
   String checkId; // linked PMS check ('' = none)
@@ -72,6 +73,7 @@ class SupplyRequest {
     this.status = SupplyStatus.requested,
     this.divoBy = '',
     this.orderedBy = '',
+    this.etaMs,
     this.rejectedBy = '',
     this.rejectReason = '',
     this.checkId = '',
@@ -95,6 +97,7 @@ class SupplyRequest {
     'status': status.token,
     'divoBy': divoBy,
     'orderedBy': orderedBy,
+    'etaMs': etaMs,
     'rejectedBy': rejectedBy,
     'rejectReason': rejectReason,
     'checkId': checkId,
@@ -116,6 +119,7 @@ class SupplyRequest {
     status: supplyStatusFromToken((j['status'] ?? 'requested') as String),
     divoBy: (j['divoBy'] ?? '') as String,
     orderedBy: (j['orderedBy'] ?? '') as String,
+    etaMs: j['etaMs'] as int?,
     rejectedBy: (j['rejectedBy'] ?? '') as String,
     rejectReason: (j['rejectReason'] ?? '') as String,
     checkId: (j['checkId'] ?? '') as String,
