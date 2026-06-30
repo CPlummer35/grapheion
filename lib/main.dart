@@ -34,6 +34,7 @@ import 'domain/feedback.dart';
 import 'domain/job.dart';
 import 'domain/org.dart';
 import 'domain/schedule.dart';
+import 'domain/boards.dart';
 import 'domain/sked.dart';
 import 'domain/supply.dart';
 import 'domain/watch.dart';
@@ -681,6 +682,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           for (final r in _store.supplyRequests.values) {
             _bleBroadcast(kSupply, r.id, jsonEncode(r.toJson()));
           }
+          for (final b in _store.boardCloseouts.values) {
+            _bleBroadcast(kBoards, b.id, jsonEncode(b.toJson()));
+          }
           for (final s in _store.qualifications.values) {
             _bleBroadcast(kQualifications, s.id, jsonEncode(s.toJson()));
           }
@@ -1158,6 +1162,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       kPmsChecks,
       kPmsDone,
       kSupply,
+      kBoards,
       kQualifications,
       kQuals,
       kEvolutions,
@@ -6568,6 +6573,267 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // --- Weekly schedule (PMS checks + active jobs assigned to days) ----------
 
+  // --- Weekly PMS board close-out -------------------------------------------
+
+  void _saveCloseout(BoardCloseout b) {
+    b.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+    final json = jsonEncode(b.toJson());
+    _store.boardCloseouts[b.id] = b;
+    _node!.putRaw(kBoards, b.id, json);
+    _bleBroadcast(kBoards, b.id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// The DIVO certifies the board; managers may too.
+  bool get _canCloseBoard =>
+      _role == Role.divo || _role == Role.threeMC || _isKratos;
+
+  /// PMS boards: the close-out action (DIVO) + the history the viewer can see.
+  void _openBoards() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          final closeouts = _store.visibleCloseouts();
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'PMS boards',
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    "The DIVO certifies each week's scheduled PMS to the DH.",
+                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_canCloseBoard)
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _openCloseBoard();
+                        },
+                        icon: const Icon(Icons.fact_check),
+                        label: const Text("Close out last week's board"),
+                      ),
+                    ),
+                  const Divider(height: 24),
+                  if (closeouts.isEmpty)
+                    const Text(
+                      'No closed boards yet.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [for (final b in closeouts) _closeoutCard(b)],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _closeoutCard(BoardCloseout b) {
+    final div = _org.divisions[b.divisionId]?.name ?? b.divisionId;
+    final color = b.incompleteCount == 0 ? Colors.green : Colors.orange;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '$div · week of ${_shortDate(b.weekStartMs)}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: color),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '${b.complete}/${b.total} complete',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              'closed by ${b.closedBy}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            if (b.summary.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(b.summary, style: const TextStyle(fontSize: 13)),
+              ),
+            for (final inc in b.incompletes)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '• ${inc.label}: '
+                  '${inc.reason.isEmpty ? "(no reason given)" : inc.reason}',
+                  style: TextStyle(fontSize: 12, color: _duOrange),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openCloseBoard() {
+    final thisMonday = weekDays(DateTime.now().millisecondsSinceEpoch).first;
+    final weekStart = thisMonday - 7 * 86400000;
+    final weekEnd = thisMonday;
+    final division = _store.myDivision;
+    if (division.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You are not assigned to a division.')),
+      );
+      return;
+    }
+    final board = _store.pmsChecks.values
+        .where(_store.canSeeCheck)
+        .where((c) => c.periodicity.isCalendar && c.nextDueMs <= weekEnd)
+        .toList();
+    final incompletes = board
+        .where((c) => c.statusAt(weekEnd) == PmsStatus.overdue)
+        .toList();
+    final complete = board.length - incompletes.length;
+    final reasonCtrl = {
+      for (final c in incompletes) c.id: TextEditingController(),
+    };
+    final summaryCtrl = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            16 + MediaQuery.of(ctx).viewInsets.bottom,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Close out board — week of ${_shortDate(weekStart)}',
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$complete of ${board.length} scheduled checks complete'
+                  '${incompletes.isEmpty ? '' : ' · explain the rest to the DH'}',
+                  style: const TextStyle(color: Colors.grey, fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                if (incompletes.isEmpty)
+                  const Text(
+                    'Everything scheduled was completed. ✓',
+                    style: TextStyle(color: Colors.green),
+                  ),
+                for (final c in incompletes) ...[
+                  Text(
+                    c.title.isEmpty ? '${c.mip} ${c.mrcCode}' : c.title,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  TextField(
+                    controller: reasonCtrl[c.id],
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      hintText: 'Why not completed?',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                const SizedBox(height: 4),
+                TextField(
+                  controller: summaryCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Overall remarks to the DH (optional)',
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.draw),
+                    label: Text('Sign off as $_name'),
+                    onPressed: () {
+                      final now = DateTime.now().millisecondsSinceEpoch;
+                      final b = BoardCloseout(
+                        id: BoardCloseout.makeId(weekStart, division),
+                        weekStartMs: weekStart,
+                        divisionId: division,
+                        closedBy: _name,
+                        closedAtMs: now,
+                        total: board.length,
+                        complete: complete,
+                        summary: summaryCtrl.text.trim(),
+                        incompletes: [
+                          for (final c in incompletes)
+                            BoardIncomplete(
+                              checkId: c.id,
+                              label: c.title.isEmpty
+                                  ? '${c.mip} ${c.mrcCode}'
+                                  : c.title,
+                              reason: reasonCtrl[c.id]!.text.trim(),
+                            ),
+                        ],
+                        updatedAtMs: now,
+                      );
+                      _saveCloseout(b);
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Board closed — $complete/${board.length} complete',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _scheduleHeader(int weekStart) {
     final (ok, total) = _store.pmsCompliance(
       DateTime.now().millisecondsSinceEpoch,
@@ -6623,6 +6889,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       pending == 0 ? 'Spot checks' : 'Spot checks ($pending)',
                     ),
                   ),
+                  if (_canCloseBoard || _role == Role.dh)
+                    TextButton.icon(
+                      onPressed: _openBoards,
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      icon: const Icon(Icons.fact_check, size: 16),
+                      label: const Text('Boards'),
+                    ),
                   const Spacer(),
                   const Text(
                     'drag onto a day · tap to assign',

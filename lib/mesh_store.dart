@@ -10,6 +10,7 @@
 
 import 'dart:convert';
 
+import 'domain/boards.dart';
 import 'domain/bulletin.dart';
 import 'domain/casrep.dart';
 import 'domain/chain.dart';
@@ -32,6 +33,7 @@ const kCasreps = 'casreps';
 const kPmsChecks = 'pmschecks'; // SKED / PMS checks
 const kPmsDone = 'pmsdone'; // signed MRC accomplishments (one per check + day)
 const kSupply = 'supply'; // supply requisitions (the DIVO→Supply approval chain)
+const kBoards = 'boards'; // weekly PMS board close-outs (one per division + week)
 const kQualifications = 'qualifications'; // qual tree nodes (watch/knowledge/…)
 const kQuals = 'quals'; // PQS progress (person x qualification)
 const kEvolutions = 'evolutions'; // evolutions (role sets, e.g. In-Port Duty)
@@ -72,6 +74,7 @@ class MeshStore {
   final Map<String, PmsCheck> pmsChecks = {};
   final Map<String, PmsAccomplishment> pmsDone = {};
   final Map<String, SupplyRequest> supplyRequests = {};
+  final Map<String, BoardCloseout> boardCloseouts = {};
   final Map<String, Qualification> qualifications = {};
   final Map<String, PersonQual> quals = {}; // keyed by PersonQual.makeId
   final Map<String, Evolution> evolutions = {};
@@ -169,6 +172,15 @@ class MeshStore {
         if (old == null || r.updatedAtMs >= old.updatedAtMs) {
           supplyRequests[docId] = r; // LWW
           if (remote) _notifyForSupply(old, r, peer);
+        }
+      } else if (coll == kBoards) {
+        final b = BoardCloseout.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        final old = boardCloseouts[docId];
+        if (old == null || b.updatedAtMs >= old.updatedAtMs) {
+          boardCloseouts[docId] = b; // LWW
+          if (remote) _notifyForBoard(old, b, peer);
         }
       } else if (coll == kQualifications) {
         qualifications[docId] = Qualification.fromJson(
@@ -567,6 +579,56 @@ class MeshStore {
     }
   }
 
+  // --- Weekly PMS board close-outs ------------------------------------------
+
+  /// The division id a work center rolls up to ('' if unknown).
+  String divisionOf(String workcenterId) =>
+      org.workcenters[workcenterId]?.divisionId ?? '';
+
+  /// The signed-in person's division id.
+  String get myDivision => divisionOf(workcenter);
+
+  /// Whether the viewer may see a division's board close-out: their own division
+  /// (DIVO), their department (DH), or ship-wide (3MC / Kratos).
+  bool canSeeCloseout(BoardCloseout b) {
+    if (role == Role.threeMC || role == Role.kratos) return true;
+    if (org.divisions.isEmpty || role == null) return true;
+    if (b.divisionId == myDivision) return true;
+    if (role == Role.dh) {
+      final myDept = org.divisions[myDivision]?.departmentId;
+      final bDept = org.divisions[b.divisionId]?.departmentId;
+      return myDept != null && myDept.isNotEmpty && myDept == bDept;
+    }
+    return false;
+  }
+
+  /// An existing close-out for a division's week, if any.
+  BoardCloseout? closeoutFor(int weekStartMs, String divisionId) =>
+      boardCloseouts[BoardCloseout.makeId(weekStartMs, divisionId)];
+
+  /// Close-outs the viewer can see, newest week first.
+  List<BoardCloseout> visibleCloseouts() {
+    final out = boardCloseouts.values.where(canSeeCloseout).toList();
+    out.sort((a, b) => b.weekStartMs.compareTo(a.weekStartMs));
+    return out;
+  }
+
+  /// Board pings: the DH (and 3MC) hear when a DIVO closes a board in their
+  /// department — with the completion summary.
+  void _notifyForBoard(BoardCloseout? old, BoardCloseout b, String? peer) {
+    if (account == null) return;
+    if (old != null && old.closedAtMs == b.closedAtMs) return; // not fresh
+    if (b.closedBy == name) return; // the closer doesn't self-notify
+    if (!canSeeCloseout(b)) return;
+    if (role == Role.dh || role == Role.threeMC) {
+      final div = org.divisions[b.divisionId]?.name ?? b.divisionId;
+      final msg = b.incompleteCount == 0
+          ? 'all ${b.total} complete'
+          : '${b.incompleteCount} of ${b.total} not complete';
+      onNotify('PMS board closed — $div', '$msg · by ${b.closedBy}', peer);
+    }
+  }
+
   /// PMS compliance at [nowMs]: of the calendar checks in scope, how many are
   /// NOT overdue — the standard "in good standing ÷ total" PM-health number.
   /// Situational (R) checks have no due date and are excluded. Optionally
@@ -744,6 +806,7 @@ class MeshStore {
     pmsChecks.clear();
     pmsDone.clear();
     supplyRequests.clear();
+    boardCloseouts.clear();
     qualifications.clear();
     quals.clear();
     evolutions.clear();

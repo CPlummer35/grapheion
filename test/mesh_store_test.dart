@@ -4,6 +4,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:grapheion/domain/boards.dart';
 import 'package:grapheion/domain/casrep.dart';
 import 'package:grapheion/domain/chain.dart';
 import 'package:grapheion/domain/job.dart';
@@ -547,6 +548,48 @@ void main() {
       );
       store.applyDoc(kPmsDone, a.id, jsonEncode(a.toJson()), remote: true);
       expect(notes.last, contains('redo it'));
+    });
+  });
+
+  group('boards', () {
+    BoardCloseout co({String summary = '', int updated = 1}) => BoardCloseout(
+      id: BoardCloseout.makeId(1000, 'div-1'),
+      weekStartMs: 1000,
+      divisionId: 'div-1',
+      closedBy: 'DIVO',
+      closedAtMs: 1,
+      total: 5,
+      complete: 3,
+      summary: summary,
+      updatedAtMs: updated,
+    );
+
+    test('the DH is pinged when a board is closed', () {
+      store.account = _acct('dh', 'DH', Role.dh);
+      store.applyDoc(kBoards, co().id, jsonEncode(co().toJson()), remote: true);
+      expect(notes, isNotEmpty);
+    });
+
+    test('a technician is not pinged', () {
+      store.account = _acct('t', 'T', Role.technician);
+      store.applyDoc(kBoards, co().id, jsonEncode(co().toJson()), remote: true);
+      expect(notes, isEmpty);
+    });
+
+    test('apply is last-write-wins', () {
+      store.applyDoc(
+        kBoards,
+        co().id,
+        jsonEncode(co(summary: 'NEW', updated: 100).toJson()),
+        remote: true,
+      );
+      store.applyDoc(
+        kBoards,
+        co().id,
+        jsonEncode(co(summary: 'OLD', updated: 50).toJson()),
+        remote: true,
+      );
+      expect(store.boardCloseouts[co().id]!.summary, 'NEW');
     });
   });
 
