@@ -6948,6 +6948,69 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  /// Compact action buttons for a job card — same gating as the detail sheet, so
+  /// they appear on the cards where the viewer (or Kratos) can act.
+  List<Widget> _inlineJobActions(Job j) {
+    ButtonStyle compact() =>
+        FilledButton.styleFrom(visualDensity: VisualDensity.compact);
+    final isApprover = j.approver == _role || _isKratos;
+    switch (j.phase) {
+      case JobPhase.approval:
+      case JobPhase.closeout:
+        if (isApprover) {
+          return [
+            FilledButton(
+              style: compact(),
+              onPressed: () => _approve(j),
+              child: const Text('Approve'),
+            ),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+              ),
+              onPressed: () => _promptReturn(context, j),
+              child: const Text('Return'),
+            ),
+          ];
+        }
+      case JobPhase.ta:
+        if (_role == Role.portEngineer || _isKratos) {
+          return [
+            FilledButton(
+              style: compact(),
+              onPressed: () => _engageTa(j),
+              child: const Text('Engage'),
+            ),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+              ),
+              onPressed: () => _promptAction(
+                context,
+                'Decline TA',
+                'Decline',
+                (c) => _declineTa(j, c),
+              ),
+              child: const Text('Decline'),
+            ),
+          ];
+        }
+      case JobPhase.execution:
+        if (_role == Role.technician || _isKratos) {
+          return [
+            FilledButton(
+              style: compact(),
+              onPressed: () => j.inWork ? _markComplete(j) : _startWork(j),
+              child: Text(j.inWork ? 'Mark complete' : 'Start work'),
+            ),
+          ];
+        }
+      case JobPhase.closed:
+        break;
+    }
+    return const [];
+  }
+
   Widget _jobList(List<Job> jobs, {required String emptyText}) {
     if (jobs.isEmpty) {
       return Center(
@@ -6959,14 +7022,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (_, i) {
         final j = jobs[i];
-        return ListTile(
-          leading: _PriorityDot(j.priority),
-          title: Text(j.title.isEmpty ? '(untitled)' : j.title),
-          subtitle: Text(
-            '${j.ein.isEmpty ? '—' : j.ein} · ${j.workcenter} · orig ${j.originator}',
-          ),
-          trailing: _StageChip(job: j),
-          onTap: () => _openDetail(j),
+        final actions = _inlineJobActions(j);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              leading: _PriorityDot(j.priority),
+              title: Text(j.title.isEmpty ? '(untitled)' : j.title),
+              subtitle: Text(
+                '${j.ein.isEmpty ? '—' : j.ein} · ${j.workcenter} · orig ${j.originator}',
+              ),
+              trailing: _StageChip(job: j),
+              onTap: () => _openDetail(j),
+            ),
+            if (actions.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(72, 0, 16, 10),
+                child: Wrap(spacing: 8, runSpacing: 4, children: actions),
+              ),
+          ],
         );
       },
     );
