@@ -4329,7 +4329,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// A feature icon, with an unread-count badge on the Feedback item (Kratos).
   /// Features considered done for the v1 (target: 2026-09-01) — their rail icon
   /// turns DU orange-red to mark them complete.
-  static const _v1Done = {'Feedback', 'Duty Section'};
+  static const _v1Done = {'Feedback', 'Duty Section', 'CSMP', 'SKED'};
 
   Widget _badgedIcon(
     IconData icon,
