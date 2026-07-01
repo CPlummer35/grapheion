@@ -254,6 +254,7 @@ class Evolution {
   List<EvolutionRole> roles;
   List<String> routesTo; // department ids the filled watchbill routes to
   int order;
+  int updatedAtMs; // bumped on every save — drives last-write-wins on sync
   // Transient routing state (set when a manager routes the bill for a day).
   int? routedForDayMs;
   String routedBy;
@@ -267,6 +268,7 @@ class Evolution {
     List<EvolutionRole>? roles,
     List<String>? routesTo,
     this.order = 0,
+    this.updatedAtMs = 0,
     this.routedForDayMs,
     this.routedBy = '',
     this.routedAtMs = 0,
@@ -282,6 +284,7 @@ class Evolution {
     'roles': roles.map((r) => r.toJson()).toList(),
     'routesTo': routesTo,
     'order': order,
+    'updatedAtMs': updatedAtMs,
     'routedForDayMs': routedForDayMs,
     'routedBy': routedBy,
     'routedAtMs': routedAtMs,
@@ -299,6 +302,7 @@ class Evolution {
         .toList(),
     routesTo: ((j['routesTo'] as List?) ?? []).map((e) => e as String).toList(),
     order: (j['order'] ?? 0) as int,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
     routedForDayMs: j['routedForDayMs'] as int?,
     routedBy: (j['routedBy'] ?? '') as String,
     routedAtMs: (j['routedAtMs'] ?? 0) as int,

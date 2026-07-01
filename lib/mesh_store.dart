@@ -193,8 +193,10 @@ class MeshStore {
       } else if (coll == kEvolutions) {
         final e = Evolution.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final old = evolutions[docId];
-        evolutions[docId] = e;
-        if (remote) _notifyForEvolution(old, e, peer);
+        if (old == null || e.updatedAtMs >= old.updatedAtMs) {
+          evolutions[docId] = e; // LWW — a stale rebroadcast can't revert an edit
+          if (remote) _notifyForEvolution(old, e, peer);
+        }
       } else if (coll == kBill) {
         final e = BillEntry.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final old = bill[docId];

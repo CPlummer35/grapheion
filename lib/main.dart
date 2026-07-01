@@ -1255,6 +1255,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   void _saveEvolution(Evolution e) {
+    e.updatedAtMs = DateTime.now().millisecondsSinceEpoch; // newest wins on sync
     final json = jsonEncode(e.toJson());
     _store.evolutions[e.id] = e;
     _node!.putRaw(kEvolutions, e.id, json);

@@ -609,6 +609,29 @@ void main() {
       updatedAtMs: updated,
     );
 
+    test('evolutions apply is LWW — an edit does not revert', () {
+      Evolution ev(String name, int updated) =>
+          Evolution(id: 'ev', name: name, updatedAtMs: updated);
+      store.applyDoc(
+        kEvolutions,
+        'ev',
+        jsonEncode(ev('EDITED', 100).toJson()),
+        remote: true,
+      );
+      expect(store.evolutions['ev']!.name, 'EDITED');
+      store.applyDoc(
+        kEvolutions,
+        'ev',
+        jsonEncode(ev('OLD', 50).toJson()),
+        remote: true,
+      );
+      expect(
+        store.evolutions['ev']!.name,
+        'EDITED',
+        reason: 'stale rebroadcast must not revert the edit',
+      );
+    });
+
     test('a stale rebroadcast cannot revert a fresher check (reload guard)', () {
       store.applyDoc(
         kPmsChecks,
