@@ -191,9 +191,10 @@ class MeshStore {
           jsonDecode(raw) as Map<String, dynamic>,
         );
       } else if (coll == kEvolutions) {
-        evolutions[docId] = Evolution.fromJson(
-          jsonDecode(raw) as Map<String, dynamic>,
-        );
+        final e = Evolution.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final old = evolutions[docId];
+        evolutions[docId] = e;
+        if (remote) _notifyForEvolution(old, e, peer);
       } else if (coll == kBill) {
         final e = BillEntry.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final old = bill[docId];
@@ -626,6 +627,25 @@ class MeshStore {
           ? 'all ${b.total} complete'
           : '${b.incompleteCount} of ${b.total} not complete';
       onNotify('PMS board closed — $div', '$msg · by ${b.closedBy}', peer);
+    }
+  }
+
+  /// The signed-in person's department id ('' if unknown).
+  String get myDepartment => org.divisions[myDivision]?.departmentId ?? '';
+
+  /// Evolution routing ping: the DH of a department a watchbill routes to hears
+  /// when a manager routes it (fresh routedAtMs).
+  void _notifyForEvolution(Evolution? old, Evolution e, String? peer) {
+    if (account == null) return;
+    if (e.routedAtMs <= (old?.routedAtMs ?? 0)) return; // not a fresh route
+    if (e.routedBy == name) return; // the router doesn't self-notify
+    if (role != Role.dh) return;
+    if (myDepartment.isNotEmpty && e.routesTo.contains(myDepartment)) {
+      onNotify(
+        '${e.name} watchbill',
+        'routed to your department by ${e.routedBy}',
+        peer,
+      );
     }
   }
 

@@ -252,7 +252,12 @@ class Evolution {
   bool inPort;
   List<WatchShift> shifts;
   List<EvolutionRole> roles;
+  List<String> routesTo; // department ids the filled watchbill routes to
   int order;
+  // Transient routing state (set when a manager routes the bill for a day).
+  int? routedForDayMs;
+  String routedBy;
+  int routedAtMs;
 
   Evolution({
     required this.id,
@@ -260,9 +265,14 @@ class Evolution {
     this.inPort = true,
     List<WatchShift>? shifts,
     List<EvolutionRole>? roles,
+    List<String>? routesTo,
     this.order = 0,
+    this.routedForDayMs,
+    this.routedBy = '',
+    this.routedAtMs = 0,
   }) : shifts = shifts ?? [],
-       roles = roles ?? [];
+       roles = roles ?? [],
+       routesTo = routesTo ?? [];
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -270,7 +280,11 @@ class Evolution {
     'inPort': inPort,
     'shifts': shifts.map((s) => s.toJson()).toList(),
     'roles': roles.map((r) => r.toJson()).toList(),
+    'routesTo': routesTo,
     'order': order,
+    'routedForDayMs': routedForDayMs,
+    'routedBy': routedBy,
+    'routedAtMs': routedAtMs,
   };
 
   factory Evolution.fromJson(Map<String, dynamic> j) => Evolution(
@@ -283,7 +297,11 @@ class Evolution {
     roles: ((j['roles'] as List?) ?? [])
         .map((e) => EvolutionRole.fromJson(e as Map<String, dynamic>))
         .toList(),
+    routesTo: ((j['routesTo'] as List?) ?? []).map((e) => e as String).toList(),
     order: (j['order'] ?? 0) as int,
+    routedForDayMs: j['routedForDayMs'] as int?,
+    routedBy: (j['routedBy'] ?? '') as String,
+    routedAtMs: (j['routedAtMs'] ?? 0) as int,
   );
 }
 

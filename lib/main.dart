@@ -1262,6 +1262,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  /// Route the filled watchbill for [day] to its configured departments — stamps
+  /// the evolution + notifies those departments' heads.
+  void _routeEvolution(Evolution ev, int day) {
+    ev
+      ..routedForDayMs = startOfDay(day)
+      ..routedBy = _name
+      ..routedAtMs = DateTime.now().millisecondsSinceEpoch;
+    _saveEvolution(ev);
+    final depts = ev.routesTo
+        .map((id) => _org.departments[id]?.name ?? id)
+        .join(', ');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(depts.isEmpty ? 'Routed' : 'Routed to $depts'),
+        ),
+      );
+    }
+  }
+
   /// Post (or clear, if [personId] is null) a person to a role/shift on a day's
   /// instance of an evolution, and sync it.
   void _setBillEntry(
@@ -1365,6 +1385,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         builder: (_) => _EvolutionEditorPage(
           initial: ev,
           stations: stations,
+          departments: _org.departments.values.toList()
+            ..sort((a, b) => a.name.compareTo(b.name)),
           onCreateStation: _createStation,
           onSave: (e) {
             _saveEvolution(e);
@@ -4976,6 +4998,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
           ],
         ),
+        if (ev.routesTo.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 2),
+            child: Text(
+              'Routes to: '
+              '${ev.routesTo.map((id) => _org.departments[id]?.name ?? id).join(', ')}'
+              '${ev.routedForDayMs == startOfDay(day) && ev.routedBy.isNotEmpty ? ' · routed by ${ev.routedBy}' : ''}',
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ),
         if (_canManageWatch)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
@@ -4989,6 +5021,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   icon: const Icon(Icons.auto_fix_high, size: 18),
                   label: const Text('Auto-generate'),
                 ),
+                if (ev.routesTo.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _routeEvolution(ev, day),
+                    icon: const Icon(Icons.send, size: 18),
+                    label: const Text('Route'),
+                  ),
                 TextButton.icon(
                   onPressed: () => _recordWatches(ev, day),
                   icon: const Icon(Icons.fact_check_outlined, size: 18),
@@ -9368,12 +9406,14 @@ class _QrScanPageState extends State<_QrScanPage> {
 class _EvolutionEditorPage extends StatefulWidget {
   final Evolution? initial;
   final List<Qualification> stations;
+  final List<Department> departments;
   final Qualification Function(String name, String abbr) onCreateStation;
   final void Function(Evolution) onSave;
 
   const _EvolutionEditorPage({
     required this.initial,
     required this.stations,
+    required this.departments,
     required this.onCreateStation,
     required this.onSave,
   });
@@ -9388,6 +9428,7 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
   late List<WatchShift> _shifts;
   late List<EvolutionRole> _roles;
   late List<Qualification> _stations; // local; grows as new stations are made
+  late Set<String> _routesTo; // department ids the bill routes to
 
   @override
   void initState() {
@@ -9395,6 +9436,7 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
     final e = widget.initial;
     _name = TextEditingController(text: e?.name ?? '');
     _inPort = e?.inPort ?? true;
+    _routesTo = (e?.routesTo ?? const <String>[]).toSet();
     _shifts = e == null
         ? _defaultShifts()
         : e.shifts
@@ -9473,7 +9515,12 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
         inPort: _inPort,
         shifts: _shifts,
         roles: _roles,
+        routesTo: _routesTo.toList(),
         order: widget.initial?.order ?? 0,
+        // preserve any prior routing stamp
+        routedForDayMs: widget.initial?.routedForDayMs,
+        routedBy: widget.initial?.routedBy ?? '',
+        routedAtMs: widget.initial?.routedAtMs ?? 0,
       ),
     );
     Navigator.pop(context);
@@ -9515,6 +9562,32 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
             onChanged: (v) => setState(() => _inPort = v),
             title: const Text('In port'),
             subtitle: const Text('Off = an underway evolution'),
+          ),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text(
+              'Routes to',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          _hint(
+            'Which departments the filled watchbill routes to — a Sea & Anchor '
+            'routes broadly; an ordnance bill just to Weapons.',
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              for (final d in widget.departments)
+                FilterChip(
+                  label: Text(d.name),
+                  selected: _routesTo.contains(d.id),
+                  onSelected: (v) => setState(
+                    () => v ? _routesTo.add(d.id) : _routesTo.remove(d.id),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 8),
           _sectionHeader('Roles', () => _editRole(null)),

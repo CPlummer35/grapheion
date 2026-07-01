@@ -186,6 +186,23 @@ void main() {
       expect(slots.where((s) => s.shiftId == 's1').length, 1);
     });
 
+    test('routing config + routed stamp round-trip; legacy default empty', () {
+      final e = ev()
+        ..routesTo = ['dept-weps', 'dept-ops']
+        ..routedForDayMs = 100
+        ..routedBy = 'CDR Weps'
+        ..routedAtMs = 200;
+      final back = Evolution.fromJson(e.toJson());
+      expect(back.routesTo, ['dept-weps', 'dept-ops']);
+      expect(back.routedForDayMs, 100);
+      expect(back.routedBy, 'CDR Weps');
+      expect(back.routedAtMs, 200);
+      // a legacy evolution decodes with no routing
+      final legacy = Evolution.fromJson({'id': 'x', 'name': 'y'});
+      expect(legacy.routesTo, isEmpty);
+      expect(legacy.routedAtMs, 0);
+    });
+
     test('evolution round-trips', () {
       final back = Evolution.fromJson(ev().toJson());
       expect(back.roles.length, 2);
