@@ -1861,8 +1861,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// Work-center members as (accountId, name), for assignment + quals.
   List<(String, String)> _watchPeople() {
-    final wc = _workcenter;
-    return (_store.accounts.values.where((a) => a.workcenterId == wc).toList()
+    // PQS lists the whole crew (officers + enlisted); Kratos stays hidden.
+    return (_store.accounts.values.where((a) => a.role != Role.kratos).toList()
           ..sort((a, b) => a.name.compareTo(b.name)))
         .map((a) => (a.id, a.name))
         .toList();
