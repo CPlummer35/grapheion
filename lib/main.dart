@@ -709,6 +709,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           for (final r in _store.routing.values) {
             _bleBroadcast(kRouting, r.id, jsonEncode(r.toJson()));
           }
+          for (final r in _store.evoRouting.values) {
+            _bleBroadcast(kEvoRouting, r.id, jsonEncode(r.toJson()));
+          }
           for (final f in _store.feedback.values) {
             _bleBroadcast(kFeedback, f.id, jsonEncode(f.toJson()));
           }
@@ -1171,6 +1174,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       kStood,
       kEvents,
       kRouting,
+      kEvoRouting,
       kFeedback,
     ]) {
       for (final id in node.listDocuments(coll)) {
