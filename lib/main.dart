@@ -1860,14 +1860,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   /// Work-center members as (accountId, name), for assignment + quals.
-  List<(String, String)> _watchPeople() {
-    // PQS lists the whole crew (officers + enlisted); Kratos stays hidden.
-    return (_store.accounts.values.where((a) => a.role != Role.kratos).toList()
-          ..sort((a, b) => a.name.compareTo(b.name)))
-        .map((a) => (a.id, a.name))
-        .toList();
-  }
-
   String _personName(String id) =>
       _store.accounts[id]?.name ?? (id.isEmpty ? '' : id);
 
@@ -6180,7 +6172,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// tree (designations first, then watch stations, knowledge, letters).
   Widget _pqsPage() {
     final quals = _store.qualifications.values.toList()..sort(_qualSort);
-    final people = _watchPeople();
     if (quals.isEmpty) {
       return const Center(
         child: Text(
@@ -6189,21 +6180,55 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ),
       );
     }
+    final people =
+        _store.accounts.values.where((a) => a.role != Role.kratos).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
     if (people.isEmpty) {
       return const Center(
         child: Text(
-          'No people in your work center yet.',
+          'No personnel yet.',
           style: TextStyle(color: Colors.grey),
         ),
       );
     }
+    final officers = people.where(_isOfficer).toList();
+    final enlisted = people.where((a) => !_isOfficer(a)).toList();
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          TabBar(
+            tabs: [
+              Tab(text: 'OFFICER (${officers.length})'),
+              Tab(text: 'ENLISTED (${enlisted.length})'),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _pqsList(officers, quals),
+                _pqsList(enlisted, quals),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _pqsList(List<Account> group, List<Qualification> quals) {
+    if (group.isEmpty) {
+      return const Center(
+        child: Text('None.', style: TextStyle(color: Colors.grey)),
+      );
+    }
     return ListView(
       children: [
-        for (final (pid, name) in people)
+        for (final a in group)
           ExpansionTile(
-            title: Text(name),
-            subtitle: Text(_qualSummary(pid)),
-            children: [for (final q in quals) _qualRow(pid, q)],
+            title: Text(a.rate.isEmpty ? a.name : '${a.rate} ${a.name}'),
+            subtitle: Text(_qualSummary(a.id)),
+            children: [for (final q in quals) _qualRow(a.id, q)],
           ),
       ],
     );
