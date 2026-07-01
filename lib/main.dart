@@ -9654,7 +9654,6 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
   );
 
   void _editRole(EvolutionRole? existing) {
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
     String? stationId =
         existing?.stationId ??
         (_stations.isNotEmpty ? _stations.first.id : null);
@@ -9668,15 +9667,6 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(
-                  controller: nameCtrl,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    labelText: 'Role name',
-                    hintText: 'e.g. Officer of the Deck',
-                  ),
-                ),
-                const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
@@ -9729,8 +9719,8 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
             ),
             FilledButton(
               onPressed: () {
-                final nm = nameCtrl.text.trim();
-                if (nm.isEmpty || stationId == null) return;
+                if (stationId == null) return;
+                final nm = _stationName(stationId!); // name = the PQS station
                 setState(() {
                   if (existing == null) {
                     _roles.add(
