@@ -178,6 +178,24 @@ void main() {
         'periodicity': 'monthly',
       });
       expect(back.steps, isEmpty);
+      expect(back.parts, isEmpty);
+    });
+
+    test('MRC parts (name + NSN + qty) round-trip on the check', () {
+      final c = _weekly()
+        ..parts = [
+          MrcPart(
+            name: '12-speed chain (SRAM PC-1210)',
+            nsn: '3020-01-662-1210',
+          ),
+          MrcPart(name: 'Master link', qty: 2),
+        ];
+      final back = PmsCheck.fromJson(c.toJson());
+      expect(back.parts.length, 2);
+      expect(back.parts.first.name, '12-speed chain (SRAM PC-1210)');
+      expect(back.parts.first.nsn, '3020-01-662-1210');
+      expect(back.parts.first.qty, 1);
+      expect(back.parts[1].qty, 2);
     });
 
     test('accomplishment keys by check + day (same day → same id)', () {

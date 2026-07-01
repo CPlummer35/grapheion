@@ -118,6 +118,7 @@ class PmsCheck {
   String assignedTo; // person the WCS assigned ('' = unassigned)
   int? scheduledForMs; // WCS-assigned day (null = unplaced); daily = every day
   List<MrcStep> steps; // the MRC procedure (empty = a simple sign-off check)
+  List<MrcPart> parts; // parts this MRC may consume (name + NSN) — for requisitions
   int? deferredUntilMs; // deferred until this day (null = not deferred)
   String deferReason; // why it was deferred (parts/ops/access/…)
   int? placeWeekday; // 1=Mon..7=Sun: auto-place on this weekday (null = manual)
@@ -140,6 +141,7 @@ class PmsCheck {
     this.assignedTo = '',
     this.scheduledForMs,
     List<MrcStep>? steps,
+    List<MrcPart>? parts,
     this.deferredUntilMs,
     this.deferReason = '',
     this.placeWeekday,
@@ -147,7 +149,8 @@ class PmsCheck {
     required this.createdAtMs,
     required this.updatedAtMs,
   }) : doneDays = doneDays ?? [],
-       steps = steps ?? [];
+       steps = steps ?? [],
+       parts = parts ?? [];
 
   factory PmsCheck.create({
     required String id,
@@ -160,6 +163,7 @@ class PmsCheck {
     required int estMinutes,
     required int nowMs,
     List<MrcStep>? steps,
+    List<MrcPart>? parts,
   }) => PmsCheck(
     id: id,
     mip: mip,
@@ -172,6 +176,7 @@ class PmsCheck {
     lastDoneMs: null,
     lastBy: '',
     steps: steps,
+    parts: parts,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
   );
@@ -244,6 +249,7 @@ class PmsCheck {
     'assignedTo': assignedTo,
     'scheduledForMs': scheduledForMs,
     'steps': steps.map((s) => s.toJson()).toList(),
+    'parts': parts.map((p) => p.toJson()).toList(),
     'deferredUntilMs': deferredUntilMs,
     'deferReason': deferReason,
     'placeWeekday': placeWeekday,
@@ -272,6 +278,9 @@ class PmsCheck {
     steps: (j['steps'] as List?)
         ?.map((e) => MrcStep.fromJson(e as Map<String, dynamic>))
         .toList(),
+    parts: (j['parts'] as List?)
+        ?.map((e) => MrcPart.fromJson(e as Map<String, dynamic>))
+        .toList(),
     deferredUntilMs: j['deferredUntilMs'] as int?,
     deferReason: (j['deferReason'] ?? '') as String,
     placeWeekday: j['placeWeekday'] as int?,
@@ -296,6 +305,25 @@ class MrcStep {
     id: j['id'] as String,
     text: (j['text'] ?? '') as String,
     standard: (j['standard'] ?? '') as String,
+  );
+}
+
+/// A part an MRC may consume — the specific item + its stock number, baked into
+/// the card so a discrepancy pre-fills the exact requisition (e.g. a 12-speed
+/// chain, not just "chain").
+class MrcPart {
+  String name; // e.g. "12-speed chain (SRAM PC-1210)"
+  String nsn; // National Stock Number / part number ('' = none)
+  int qty;
+
+  MrcPart({required this.name, this.nsn = '', this.qty = 1});
+
+  Map<String, dynamic> toJson() => {'name': name, 'nsn': nsn, 'qty': qty};
+
+  factory MrcPart.fromJson(Map<String, dynamic> j) => MrcPart(
+    name: (j['name'] ?? '') as String,
+    nsn: (j['nsn'] ?? '') as String,
+    qty: (j['qty'] ?? 1) as int,
   );
 }
 

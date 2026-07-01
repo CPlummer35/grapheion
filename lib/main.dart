@@ -3538,6 +3538,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     required Periodicity periodicity,
     required int estMinutes,
     List<MrcStep>? steps,
+    List<MrcPart>? parts,
     String trigger = '',
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -3552,6 +3553,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       estMinutes: estMinutes,
       nowMs: now,
       steps: steps,
+      parts: parts,
     )..trigger = trigger;
     _savePmsCheck(c);
     return c;
@@ -3663,6 +3665,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           lastDoneMs: s.$6 == null ? null : now - s.$6! * day,
           lastBy: s.$6 == null ? '' : 'demo',
           steps: _bikeSteps(s.$1),
+          parts: _bikeParts(s.$1),
           trigger: s.$4 == Periodicity.situational ? 'pad thickness < 1.5 mm' : '',
           createdAtMs: now,
           updatedAtMs: now,
@@ -3721,6 +3724,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         MrcStep(id: '$id-s${i + 1}', text: raw[i].$1, standard: raw[i].$2),
     ];
   }
+
+  /// Bicycle-themed parts baked into each MRC — the SPECIFIC item for this bike
+  /// (a 12-speed drivetrain), so a discrepancy pre-fills the exact requisition.
+  static List<MrcPart> _bikeParts(String id) => switch (id) {
+    'pms-bike-002' => [
+      MrcPart(name: '12-speed chain (SRAM PC-1210)', nsn: '3020-01-662-1210'),
+    ],
+    'pms-bike-005' => [
+      MrcPart(name: 'Spokes, 14g 264mm (bulk)', nsn: '5340-01-441-0264', qty: 4),
+    ],
+    'pms-bike-006' => [
+      MrcPart(name: 'Hydraulic brake fluid, DOT 5.1', nsn: '9150-01-051-0510'),
+    ],
+    'pms-bike-008' => [
+      MrcPart(name: 'Disc brake pads, organic (SRAM)', nsn: '2530-01-115-0080'),
+    ],
+    _ => const <MrcPart>[],
+  };
 
   void _saveOrgEntity(String coll, String id, String json) {
     _node!.putRaw(coll, id, json);
@@ -3840,8 +3861,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 a.jobId = job.id;
                 _saveAccomplishment(a);
                 Navigator.pop(ctx);
-                // "Both" flow: chain to the part request, linked to job + check.
+                // "Both" flow: chain to the part request, pre-filled from the
+                // MRC's baked-in part (e.g. the 12-speed chain), linked to both.
+                final part = c.parts.isNotEmpty ? c.parts.first : null;
                 _promptRequestPart(
+                  prefillPart: part?.name ?? '',
+                  prefillNsn: part?.nsn ?? '',
+                  prefillQty: part?.qty ?? 1,
                   ein: c.ein,
                   reason: 'PMS ${c.mip} ${c.mrcCode}: ${unsat.join('; ')}',
                   priority: priority,
@@ -3948,6 +3974,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Open a part-request form (optionally pre-filled from a PMS check / job).
   void _promptRequestPart({
     String prefillPart = '',
+    String prefillNsn = '',
+    int prefillQty = 1,
     String ein = '',
     String reason = '',
     int priority = 3,
@@ -3955,8 +3983,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     String jobId = '',
   }) {
     final partCtrl = TextEditingController(text: prefillPart);
-    final nsnCtrl = TextEditingController();
-    final qtyCtrl = TextEditingController(text: '1');
+    final nsnCtrl = TextEditingController(text: prefillNsn);
+    final qtyCtrl = TextEditingController(text: '$prefillQty');
     var pri = priority;
     showDialog(
       context: context,
@@ -6380,6 +6408,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final trigger = TextEditingController();
     final stepText = <TextEditingController>[];
     final stepStd = <TextEditingController>[];
+    final partName = <TextEditingController>[];
+    final partNsn = <TextEditingController>[];
     Periodicity per = Periodicity.monthly;
     showModalBottomSheet(
       context: context,
@@ -6535,6 +6565,63 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       ],
                     ),
                   ),
+                const Divider(height: 24),
+                Row(
+                  children: [
+                    const Text(
+                      'Parts (for requisitions)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () => setS(() {
+                        partName.add(TextEditingController());
+                        partNsn.add(TextEditingController());
+                      }),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add part'),
+                    ),
+                  ],
+                ),
+                for (var i = 0; i < partName.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: partName[i],
+                            decoration: InputDecoration(
+                              isDense: true,
+                              hintText: 'Part ${i + 1} (e.g. 12-speed chain)',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 2,
+                          child: TextField(
+                            controller: partNsn[i],
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'NSN',
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.remove_circle_outline,
+                            size: 20,
+                          ),
+                          onPressed: () => setS(() {
+                            partName.removeAt(i);
+                            partNsn.removeAt(i);
+                          }),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: () {
@@ -6549,6 +6636,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             standard: stepStd[i].text.trim(),
                           ),
                     ];
+                    final builtParts = [
+                      for (var i = 0; i < partName.length; i++)
+                        if (partName[i].text.trim().isNotEmpty)
+                          MrcPart(
+                            name: partName[i].text.trim(),
+                            nsn: partNsn[i].text.trim(),
+                          ),
+                    ];
                     _createPmsCheck(
                       mip: m,
                       seq: int.tryParse(seq.text.trim()) ?? 1,
@@ -6557,6 +6652,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       periodicity: per,
                       estMinutes: int.tryParse(mins.text.trim()) ?? 0,
                       steps: builtSteps,
+                      parts: builtParts,
                       trigger: trigger.text.trim(),
                     );
                     Navigator.pop(ctx);
