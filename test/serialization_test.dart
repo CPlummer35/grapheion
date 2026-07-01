@@ -91,7 +91,7 @@ void main() {
     });
     test('an unknown / legacy token falls back to technician', () {
       expect(roleFromToken('cheng'), Role.technician); // legacy, pre-DH rename
-      expect(roleFromToken('xo'), Role.technician);
+      expect(roleFromToken('bogus'), Role.technician);
     });
   });
 

@@ -39,7 +39,17 @@ void main() {
       expect(scopeForRole(Role.divo), Scope.division);
       expect(scopeForRole(Role.dh), Scope.department);
       expect(scopeForRole(Role.threeMC), Scope.ship);
+      expect(scopeForRole(Role.xo), Scope.ship);
+      expect(scopeForRole(Role.co), Scope.ship);
       expect(scopeForRole(Role.portEngineer), Scope.offship);
+    });
+
+    test('XO + CO round-trip + tags', () {
+      expect(roleFromToken('xo'), Role.xo);
+      expect(roleFromToken('co'), Role.co);
+      expect(Role.xo.tag, 'XO');
+      expect(Role.co.tag, 'CO');
+      expect(Role.co.title, 'Commanding Officer');
     });
   });
 

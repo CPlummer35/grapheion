@@ -1869,7 +1869,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// Ship-wide roles run the duty-section rotation + see every section. Everyone
   /// DH-and-below sees only their own duty section.
-  bool get _canManageSections => _role == Role.threeMC || _role == Role.kratos;
+  bool get _canManageSections =>
+      _role == Role.threeMC ||
+      _role == Role.xo ||
+      _role == Role.co ||
+      _role == Role.kratos;
 
   /// Section-watchbill admin (create / auto-fill / record / clear / assign).
   /// Duty-POSITION axis, additive to role: 3MC/Kratos manage any section; a
@@ -2584,6 +2588,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final r = _role;
     return r == Role.divo ||
         r == Role.dh ||
+        r == Role.xo ||
+        r == Role.co ||
         r == Role.threeMC ||
         r == Role.portEngineer ||
         r == Role.kratos;
@@ -2611,7 +2617,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     'CW5',
   };
 
+  // Officer billets are officers regardless of the rate field.
+  static const _officerRoles = {Role.divo, Role.dh, Role.xo, Role.co};
+
   bool _isOfficer(Account a) =>
+      _officerRoles.contains(a.role) ||
       _officerRates.contains(a.rate.toUpperCase().trim());
 
   /// The division name for a person (via their work center), or '—'.
@@ -6830,7 +6840,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// The DIVO certifies the board; managers may too.
   bool get _canCloseBoard =>
-      _role == Role.divo || _role == Role.threeMC || _isKratos;
+      _role == Role.divo ||
+      _role == Role.threeMC ||
+      _role == Role.xo ||
+      _role == Role.co ||
+      _isKratos;
 
   /// PMS boards: the close-out action (DIVO) + the history the viewer can see.
   void _openBoards() {
@@ -7599,6 +7613,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _role == Role.divo ||
       _role == Role.threeMC ||
       _role == Role.dh ||
+      _role == Role.xo ||
+      _role == Role.co ||
       _role == Role.portEngineer;
 
   Widget _casrepPage() {

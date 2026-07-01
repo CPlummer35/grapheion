@@ -264,6 +264,9 @@ Scope scopeForRole(Role r) {
       return Scope.department;
     case Role.threeMC:
       return Scope.ship;
+    case Role.xo:
+    case Role.co:
+      return Scope.ship; // command — sees the whole ship
     case Role.kratos:
       return Scope.ship; // sees everything
     case Role.portEngineer:

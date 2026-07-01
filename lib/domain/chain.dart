@@ -14,6 +14,8 @@ enum Role {
   divo, // Division Officer
   threeMC, // 3-M Coordinator — screens the job into the CSMP
   dh, // Department Head (universal — CHENG/WEPS/OPS/CSO/SUPPO)
+  xo, // Executive Officer — second in command
+  co, // Commanding Officer (Captain) — top of the chain, final authority
   portEngineer, // OFF-SHIP — Regional Maintenance Center; reached over the relay
   kratos, // super-user — sole feedback reader + highest authority (demo owner)
 }
@@ -34,6 +36,10 @@ extension RoleInfo on Role {
         return '3-M Coordinator';
       case Role.dh:
         return 'Department Head';
+      case Role.xo:
+        return 'Executive Officer';
+      case Role.co:
+        return 'Commanding Officer';
       case Role.portEngineer:
         return 'Port Engineer (off-ship)';
       case Role.kratos:
@@ -56,6 +62,10 @@ extension RoleInfo on Role {
         return '3MC';
       case Role.dh:
         return 'DH';
+      case Role.xo:
+        return 'XO';
+      case Role.co:
+        return 'CO';
       case Role.portEngineer:
         return 'PORT ENG';
       case Role.kratos:
