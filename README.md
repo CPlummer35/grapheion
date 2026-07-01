@@ -47,9 +47,12 @@ in a compartment with no network still converge.
   marks it complete, then it climbs the close-out ladder **WCS → LPO → DIVO**
   before it's **Closed**.
 - Four sub-tabs: **INBOX** (your action) · **PENDING** (in routing) · **ACTIVE**
-  (approved / in work) · **COMPLETED**.
+  (approved / in work) · **COMPLETED**. Job cards carry **inline action buttons**
+  (Approve / Return / Engage / Start / Mark complete) for whoever can act — no
+  need to open each job.
 - **Chain of custody** — every action is recorded in an append-only audit log on
-  each job, and the next approver gets a "your turn" notification.
+  each job, and the next approver gets a "your turn" notification. A job's detail
+  also shows its **linked parts** (from Supply) with status + expected delivery.
 
 ### SKED — preventive maintenance (PMS) + the weekly schedule
 - **PMS checks (MRCs)** under a **MIP** (Maintenance Index Page): each carries a
@@ -68,7 +71,9 @@ in a compartment with no network still converge.
   with a reading, then **signs** it. The accomplishment is recorded per check +
   day, with the signer.
 - **Discrepancy → corrective work** — marking a step **UNSAT** raises a
-  **corrective CSMP job _and_ a linked Supply part request** in one flow.
+  **corrective CSMP job _and_ a linked Supply part request** in one flow, the
+  request **pre-filled from the parts baked into the MRC** (the specific item +
+  NSN — e.g. this bike's 12-speed chain, not a generic "chain").
 - **WCS spot-check** — a supervisor reviews signed work in a **Spot checks**
   queue and **verifies** it or **kicks it back** with a reason (the performer
   and supervisor are notified).
@@ -79,9 +84,13 @@ in a compartment with no network still converge.
 - **Recurring auto-placement** — set a check to land on a chosen weekday every
   week so the board fills itself; **situational (R)** checks carry a
   **trigger/condition** ("when: pad < 1.5 mm").
+- **Weekly board close-out** — at the start of each work week the **DIVO
+  certifies the prior week's board** for their division: the sheet flags which
+  scheduled checks slipped, the DIVO explains each and signs off, and the
+  **DH** is notified and can read the certification + the incomplete reasons.
 - **The WCS assigns** a work-center member to each task. A one-tap **Bicycle PMS
-  example** — with real procedure steps — seeds a relatable, self-demonstrating
-  schedule (one MRC per periodicity + a situational one).
+  example** — with real procedure steps and baked-in parts — seeds a relatable,
+  self-demonstrating schedule (one MRC per periodicity + a situational one).
 
 ### CASREP
 - A **CASREP**'s category is derived from job priority (pri 1 → CAT 4, severity-
@@ -128,9 +137,13 @@ in a compartment with no network still converge.
   approval _is_ the order) → **Received** → **Issued** back to the work center.
   Either approver can **reject** with a reason.
 - **Order authority** is **LPO-and-above inside the Supply department** — a
-  supply tech or WCS can't order parts. Supply sees every request; everyone else
-  sees their own chain's. Each step notifies the right party, and a request
-  carries links back to the PMS check + corrective job for traceability.
+  supply tech or WCS can't order parts. Supply sees every request; a **DIVO sees
+  their whole division's**; everyone else sees their own chain's. Each step
+  notifies the right party.
+- **Expected delivery + traceability** — when Supply orders, it sets an
+  **expected-delivery date** shown on the request; and because each request links
+  back to its **PMS check + corrective job**, opening the job shows its parts,
+  their status, and when they're due.
 
 ### Demo feedback
 - Anyone trying the demo can tap the **feedback** button in the app bar on any
@@ -159,10 +172,10 @@ Grapheion is a Flutter app that depends on the `peat_flutter` package (the mesh
 binding over the `peat-ffi` native library). It does not run its own server —
 the device mesh *is* the backend. Everything syncs as peat documents: **jobs**,
 the **audit log**, **accounts**, the **org chart** (departments / divisions /
-work centers), **CASREPs**, **PMS checks + signed accomplishments**, **supply
-requests**, **qualifications + PQS progress**, the **watchbill + its approval
-routing + duty-day events**, and **presence** — over **two transports in
-parallel**:
+work centers), **CASREPs**, **PMS checks (with steps + parts) + signed
+accomplishments + weekly board close-outs**, **supply requests**,
+**qualifications + PQS progress**, the **watchbill + its approval routing +
+duty-day events**, and **presence** — over **two transports in parallel**:
 
 - **Iroh/QUIC** — Wi-Fi/mDNS on the LAN, plus the n0 relay for the off-ship Port
   Engineer. Key-gated by peat's formation handshake.
@@ -177,12 +190,13 @@ state.
 Synced state and the inbound-apply / visibility / notification logic live in a
 pure, node-free **`MeshStore`** (`lib/mesh_store.dart`); the widget reads it
 through thin getters and delegates to it. That keeps the logic unit-testable: a
-host-run **`flutter test`** suite (~145 tests, sub-second — the job lifecycle +
+host-run **`flutter test`** suite (~152 tests, sub-second — the job lifecycle +
 rung-skipping ladder, role-scoped visibility, CASREP categories, the PMS
-periodicity/MIP-MRC/schedule model, MRC steps + signed accomplishments +
-spot-check + compliance, the duty-position axis + watchbill approval chain, the
-supply requisition chain, last-write-wins sync guards, serialization, and a UI
-smoke test) is the regression net. Run it before changes.
+periodicity/MIP-MRC/schedule model, MRC steps + parts + signed accomplishments +
+spot-check + compliance, the weekly board close-out, the duty-position axis +
+watchbill approval chain, the supply requisition chain, last-write-wins sync
+guards, serialization, and a UI smoke test) is the regression net. Run it before
+changes.
 
 Repo layout this project expects (siblings under one parent):
 
@@ -195,11 +209,12 @@ code/
 
 ## Run it on macOS
 
-grapheion path-depends on the sibling `peat-flutter` package, which links a
-native Rust library (`peat-ffi`) built from the sibling `peat` workspace — so a
-bare clone won't build until those are in place. **The fastest path is the
-bootstrap script** (it clones the siblings, installs prerequisites, builds the
-native libraries, and fetches deps):
+grapheion path-depends on the sibling `peat-flutter` package (tracking upstream
+`main`), which links a native Rust library — its `rust/` wrapper builds the
+**published `peat-ffi` crate** into `libpeat_ffi.dylib` / `PeatFFI.xcframework`.
+So a bare clone won't build until the sibling is in place and that native lib is
+built. **The fastest path is the bootstrap script** (it clones the siblings,
+installs prerequisites, builds the native libraries, and fetches deps):
 
 ```sh
 ./scripts/bootstrap-macos.sh
@@ -244,15 +259,16 @@ appears on the other over Bluetooth.
 Proof-of-concept, running on **macOS, iOS, and Android**. Working: the full
 corrective-maintenance (CSMP) job lifecycle with a rung-skipping approval ladder,
 preventive PMS (SKED) with the drag-and-drop weekly schedule, **checklist MRCs +
-signed completion + WCS spot-check + compliance % + deferral + auto-placement**,
-**PMS-discrepancy → corrective job + Supply part request**, the **Supply
-requisition chain** (DIVO → Supply, LPO-and-above gated), the **Duty Section
-watchbill approval chain** (Section Leader → CDO, with finalize/record + history),
-CASREP-from-priority, the in-port watchbill + PQS qualification tree (incl. SWO
-prerequisites), in-app demo feedback over the mesh, org-scoped visibility,
-QR-gated join, role switching, notifications, a dual Iroh + BLE transport (BLE
-AES-256-GCM encrypted, both transports formation-key gated), and an ~145-test
-host-run regression suite.
+parts + signed completion + WCS spot-check + compliance % + deferral +
+auto-placement + the weekly board close-out (DIVO → DH)**, **PMS-discrepancy →
+corrective job + a part requisition pre-filled from the MRC**, the **Supply
+requisition chain** (DIVO → Supply, LPO-and-above gated, with expected-delivery
+dates), the **Duty Section watchbill approval chain** (Section Leader → CDO, with
+finalize/record + history), CASREP-from-priority, the in-port watchbill + PQS
+qualification tree (incl. SWO prerequisites), in-app demo feedback over the mesh,
+org-scoped visibility, QR-gated join, role switching, notifications, a dual Iroh +
+BLE transport (BLE AES-256-GCM encrypted, both transports formation-key gated),
+and an ~152-test host-run regression suite.
 
 Not done / not for operational use:
 
