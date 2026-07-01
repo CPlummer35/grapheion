@@ -4481,7 +4481,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     (Icons.construction, 'CSMP'),
     (Icons.calendar_month, 'SKED'),
     (Icons.warning_amber, 'CASREP'),
-    (Icons.event_note, 'Watchbills'),
+    (Icons.event_note, 'Evolutions'),
     (Icons.shield, 'Duty Section'),
     (Icons.workspace_premium, 'PQS'),
     (Icons.hub, 'Connection'),
@@ -4570,7 +4570,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return _casrepPage();
       case 'Connection':
         return _connectionsPage();
-      case 'Watchbills':
+      case 'Evolutions':
         return _watchbillPage();
       case 'PQS':
         return _pqsPage();
@@ -4877,21 +4877,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'No watchbill set up yet.',
+                'No evolutions yet.\n'
+                'Build your own — Sea & Anchor, GQ, In-Port Duty… —\n'
+                'with its watchstations + rotation.',
+                textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey),
               ),
               if (_canManageWatch) ...[
                 const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: _seedQualifications,
-                  icon: const Icon(Icons.anchor),
-                  label: const Text('Load In-Port Duty + stations'),
-                ),
-                const SizedBox(height: 8),
-                TextButton.icon(
+                FilledButton.icon(
                   onPressed: () => _openEvolutionEditor(null),
                   icon: const Icon(Icons.add),
                   label: const Text('New evolution'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _seedQualifications,
+                  icon: const Icon(Icons.anchor),
+                  label: const Text('Or load the In-Port Duty example'),
                 ),
               ],
             ],
@@ -5339,9 +5342,58 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           icon: const Icon(Icons.auto_fix_high),
           onPressed: _autoAssignDutySections,
         ),
+        IconButton(
+          tooltip: 'Clear everyone from duty sections',
+          icon: const Icon(Icons.group_remove),
+          onPressed: _confirmClearDutySections,
+        ),
       ],
     ),
   );
+
+  void _confirmClearDutySections() {
+    final n = _store.accounts.values
+        .where((a) => a.dutySection.isNotEmpty)
+        .length;
+    if (n == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No one is assigned to a duty section.')),
+      );
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear duty sections'),
+        content: Text('Remove all $n people from their duty sections?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              for (final a in _store.accounts.values.toList()) {
+                if (a.dutySection.isNotEmpty) {
+                  a.dutySection = '';
+                  _updateAccount(a);
+                }
+              }
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Cleared everyone from duty sections.'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Clear all'),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// The section's in-port watchbill — the In-Port Duty evolution filled from
   /// ONLY this section's members.
