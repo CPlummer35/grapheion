@@ -5054,7 +5054,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 if (r.rotating)
                   _billRotatingGroup(day, ev, r)
                 else
-                  _billSlotTile(day, ev, r, '', r.name, 'whole day'),
+                  _billSlotTile(day, ev, r, '', r.name, 'whole evolution'),
             ],
           ),
         ),
@@ -9602,10 +9602,8 @@ class _EvolutionEditorPageState extends State<_EvolutionEditorPage> {
                 size: 18,
                 color: Theme.of(context).colorScheme.primary,
               ),
-              title: Text(r.name),
-              subtitle: Text(
-                '${_stationName(r.stationId)} · ${r.rotating ? 'Rotating' : 'Standing'}',
-              ),
+              title: Text(r.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+              subtitle: Text(r.rotating ? 'Rotating' : 'Standing'),
               trailing: IconButton(
                 icon: const Icon(Icons.delete_outline, size: 20),
                 onPressed: () => setState(() => _roles.remove(r)),
