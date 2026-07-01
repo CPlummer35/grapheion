@@ -1263,26 +1263,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
-  /// Route the filled watchbill for [day] to its configured departments — stamps
-  /// the evolution + notifies those departments' heads.
-  void _routeEvolution(Evolution ev, int day) {
-    ev
-      ..routedForDayMs = startOfDay(day)
-      ..routedBy = _name
-      ..routedAtMs = DateTime.now().millisecondsSinceEpoch;
-    _saveEvolution(ev);
-    final depts = ev.routesTo
-        .map((id) => _org.departments[id]?.name ?? id)
-        .join(', ');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(depts.isEmpty ? 'Routed' : 'Routed to $depts'),
-        ),
-      );
-    }
-  }
-
   /// Post (or clear, if [personId] is null) a person to a role/shift on a day's
   /// instance of an evolution, and sync it.
   void _setBillEntry(
@@ -2169,6 +2149,117 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _saveRouting(r);
   }
 
+  // --- Evolution watchbill approval chain (climbs DH → XO → CO) -------------
+
+  void _saveEvoRouting(EvolutionRouting r) {
+    r.updatedAtMs = DateTime.now().millisecondsSinceEpoch; // newest wins on sync
+    final json = jsonEncode(r.toJson());
+    _store.evoRouting[r.id] = r;
+    _node!.putRaw(kEvoRouting, r.id, json);
+    _bleBroadcast(kEvoRouting, r.id, json);
+    if (mounted) setState(() {});
+  }
+
+  /// May submit an evolution watchbill (plan or record) — a watch manager.
+  bool get _canSubmitEvo => _canManageWatch;
+
+  /// The account is the command rung this routing is currently waiting on
+  /// (its DH / XO / CO). Kratos may approve at any rung.
+  bool _isEvoApprover(EvolutionRouting r) =>
+      _role == r.currentRung || _isKratos;
+
+  /// Coordinator submits the built plan → enters the ladder at the DH.
+  void _submitEvo(Evolution ev, int dayMs) {
+    final r = _store.evoRoutingFor(ev.id, dayMs)
+      ..status = BillStatus.submitted
+      ..currentRung = kCommandChain.first // DH
+      ..submittedBy = _account?.id ?? ''
+      ..submittedAtMs = DateTime.now().millisecondsSinceEpoch
+      ..approvals = []
+      ..returnedBy = ''
+      ..returnedNote = '';
+    _saveEvoRouting(r);
+  }
+
+  /// The current rung approves — advance DH→XO→CO; past the CO the plan is
+  /// certified (Approved).
+  void _approveEvo(Evolution ev, int dayMs) {
+    final r = _store.evoRoutingFor(ev.id, dayMs);
+    r.approvals = [
+      ...r.approvals,
+      '${r.currentRung.tag} · ${_account?.name ?? ''}',
+    ];
+    final up = nextCommand(r.currentRung);
+    if (up == null) {
+      r.status = BillStatus.approved; // CO signed — plan certified
+    } else {
+      r.currentRung = up;
+    }
+    _saveEvoRouting(r);
+  }
+
+  /// The current rung returns the plan to the coordinator — back to Draft.
+  void _returnEvo(Evolution ev, int dayMs, String note) {
+    final r = _store.evoRoutingFor(ev.id, dayMs)
+      ..status = BillStatus.draft
+      ..returnedBy = _account?.id ?? ''
+      ..returnedNote = note;
+    _saveEvoRouting(r);
+  }
+
+  /// Coordinator submits the record (events logged) → climbs the ladder again.
+  void _submitEvoFinalize(Evolution ev, int dayMs) {
+    final r = _store.evoRoutingFor(ev.id, dayMs)
+      ..status = BillStatus.finalizing
+      ..currentRung = kCommandChain.first
+      ..submittedBy = _account?.id ?? ''
+      ..submittedAtMs = DateTime.now().millisecondsSinceEpoch
+      ..returnedBy = ''
+      ..returnedNote = '';
+    _saveEvoRouting(r);
+  }
+
+  /// The current rung approves the record — advance; past the CO record the
+  /// watches (counters + history) and mark Finalized.
+  void _approveEvoFinalize(Evolution ev, int dayMs) {
+    final r = _store.evoRoutingFor(ev.id, dayMs);
+    r.approvals = [
+      ...r.approvals,
+      '${r.currentRung.tag} · ${_account?.name ?? ''}',
+    ];
+    final up = nextCommand(r.currentRung);
+    if (up == null) {
+      final n = _recordWatches(
+        ev,
+        dayMs,
+        recordDayMs: dayMs,
+        section: ev.id,
+        snack: false,
+      );
+      r.status = BillStatus.finalized;
+      _saveEvoRouting(r);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Recorded $n watch${n == 1 ? '' : 'es'} stood'),
+          ),
+        );
+      }
+    } else {
+      r.currentRung = up;
+      _saveEvoRouting(r);
+    }
+  }
+
+  /// The current rung returns the record to the coordinator — back to Approved.
+  void _returnEvoFinalize(Evolution ev, int dayMs, String note) {
+    final r = _store.evoRoutingFor(ev.id, dayMs)
+      ..status = BillStatus.approved
+      ..returnedBy = _account?.id ?? ''
+      ..returnedNote = note;
+    _saveEvoRouting(r);
+  }
+
   /// Start the next duty day's bill from a Finalized one (SL): back to Draft.
   void _newBillCycle(String section) {
     final r = _store.routingFor(section)
@@ -2555,6 +2646,346 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ),
       ],
+    );
+  }
+
+  // --- Evolution watchbill approval chain UI (DH → XO → CO) -----------------
+
+  Widget _evoStatusBar(Evolution ev, int day, EvolutionRouting r) {
+    final actions = <Widget>[];
+    switch (r.status) {
+      case BillStatus.draft:
+        if (_canSubmitEvo) {
+          actions.add(
+            FilledButton.tonalIcon(
+              onPressed: () => _autoFillBill(ev, day),
+              icon: const Icon(Icons.auto_fix_high, size: 18),
+              label: const Text('Auto-generate'),
+            ),
+          );
+          actions.add(
+            TextButton.icon(
+              onPressed: () => _clearBill(ev, day),
+              icon: const Icon(Icons.clear_all, size: 18),
+              label: const Text('Clear'),
+            ),
+          );
+          actions.add(
+            TextButton.icon(
+              onPressed: _seedDemoCrew,
+              icon: const Icon(Icons.group_add, size: 18),
+              label: const Text('Demo crew'),
+            ),
+          );
+          actions.add(
+            _ConfirmButton(
+              label: 'Submit for approval',
+              confirmLabel: 'Tap to confirm',
+              icon: Icons.send,
+              onConfirm: () => _submitEvo(ev, day),
+            ),
+          );
+        }
+      case BillStatus.submitted:
+        if (_isEvoApprover(r)) {
+          actions.add(
+            FilledButton.icon(
+              onPressed: () => _approveEvo(ev, day),
+              icon: const Icon(Icons.check, size: 18),
+              label: Text('Approve as ${r.currentRung.tag}'),
+            ),
+          );
+          actions.add(
+            OutlinedButton.icon(
+              onPressed: () => _promptEvoReturn(ev, day, finalize: false),
+              icon: const Icon(Icons.undo, size: 18),
+              label: const Text('Return'),
+            ),
+          );
+        }
+      case BillStatus.approved:
+        if (_canSubmitEvo) {
+          actions.add(
+            FilledButton.icon(
+              onPressed: () => _openEvoFinalizeSheet(ev, day, forApprover: false),
+              icon: const Icon(Icons.fact_check_outlined, size: 18),
+              label: const Text('Record with events'),
+            ),
+          );
+        }
+      case BillStatus.finalizing:
+        if (_isEvoApprover(r)) {
+          actions.add(
+            FilledButton.icon(
+              onPressed: () => _openEvoFinalizeSheet(ev, day, forApprover: true),
+              icon: const Icon(Icons.rule, size: 18),
+              label: Text('Review & approve as ${r.currentRung.tag}'),
+            ),
+          );
+        }
+      case BillStatus.finalized:
+        break;
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _evoStatusChip(r),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 4, children: actions),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _evoStatusChip(EvolutionRouting r) {
+    final signed = r.approvals.isEmpty
+        ? ''
+        : ' · signed: ${r.approvals.join(', ')}';
+    final (label, color, detail) = switch (r.status) {
+      BillStatus.draft => r.returnedNote.isNotEmpty
+          ? (
+              'RETURNED',
+              _duOrange,
+              'by ${_billPersonLabel(r.returnedBy)}: ${r.returnedNote}',
+            )
+          : ('DRAFT', Colors.grey, 'coordinator is building the bill'),
+      BillStatus.submitted => (
+        'WITH ${r.currentRung.tag}',
+        Colors.blue,
+        'plan by ${_billPersonLabel(r.submittedBy)} — DH→XO→CO$signed',
+      ),
+      BillStatus.approved => (
+        'APPROVED',
+        Colors.green,
+        'plan certified by the CO$signed',
+      ),
+      BillStatus.finalizing => (
+        'RECORD · WITH ${r.currentRung.tag}',
+        Colors.blue,
+        'events by ${_billPersonLabel(r.submittedBy)} — DH→XO→CO$signed',
+      ),
+      BillStatus.finalized => (
+        'RECORDED',
+        Colors.green,
+        'certified by the CO — watches recorded',
+      ),
+    };
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            border: Border.all(color: color),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            detail,
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+            maxLines: 2,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _promptEvoReturn(Evolution ev, int day, {required bool finalize}) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Return to coordinator'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Reason for return',
+            hintText: 'e.g. OOD not qualified for the underway',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final note = ctrl.text.trim();
+              Navigator.pop(ctx);
+              if (finalize) {
+                _returnEvoFinalize(ev, day, note);
+              } else {
+                _returnEvo(ev, day, note);
+              }
+            },
+            child: const Text('Return'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The events sheet for recording an evolution — the coordinator logs the
+  /// events that occurred and submits (forApprover: false), or the current
+  /// command rung reviews + approves/returns (forApprover: true). Events are
+  /// keyed by the evolution id (its own scope), reusing the duty-day machinery.
+  void _openEvoFinalizeSheet(
+    Evolution ev,
+    int day, {
+    required bool forApprover,
+  }) {
+    final d = startOfDay(day);
+    final r = _store.evoRoutingFor(ev.id, day);
+    var pickType = kDutyDayEventTypes.first;
+    final noteCtrl = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          final events = _store.eventsForDay(d, ev.id);
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                16 + MediaQuery.of(ctx).viewInsets.bottom,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      forApprover
+                          ? 'Review ${ev.name}'
+                          : 'Record ${ev.name}',
+                      style: Theme.of(ctx).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      forApprover
+                          ? 'Adjust the events if needed, then approve as ${r.currentRung.tag} (the CO signs last to record), or return it to the coordinator.'
+                          : 'Log the events that occurred, then submit — it climbs DH→XO→CO to record the evolution.',
+                      style: const TextStyle(color: Colors.grey, fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    if (events.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          'No events logged.',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    for (final e in events)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.warning_amber_rounded,
+                          size: 18,
+                          color: Colors.orange,
+                        ),
+                        title: Text(e.type),
+                        subtitle: e.note.isEmpty ? null : Text(e.note),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                          onPressed: () {
+                            _deleteDutyEvent(e);
+                            setS(() {});
+                          },
+                        ),
+                      ),
+                    const Divider(),
+                    DropdownButton<String>(
+                      value: pickType,
+                      isExpanded: true,
+                      items: [
+                        for (final t in kDutyDayEventTypes)
+                          DropdownMenuItem(value: t, child: Text(t)),
+                      ],
+                      onChanged: (v) => setS(() => pickType = v ?? pickType),
+                    ),
+                    TextField(
+                      controller: noteCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Note (optional)',
+                        hintText: 'Details',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add event'),
+                      onPressed: () {
+                        _addDutyEvent(d, ev.id, pickType, noteCtrl.text.trim());
+                        noteCtrl.clear();
+                        setS(() {});
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    if (!forApprover)
+                      SizedBox(
+                        width: double.infinity,
+                        child: _ConfirmButton(
+                          label: 'Submit for approval',
+                          confirmLabel: 'Tap to confirm',
+                          icon: Icons.send,
+                          onConfirm: () {
+                            _submitEvoFinalize(ev, day);
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                      )
+                    else ...[
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          icon: const Icon(Icons.check),
+                          label: Text('Approve as ${r.currentRung.tag}'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _approveEvoFinalize(ev, day);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.undo),
+                          label: const Text('Return to coordinator'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _promptEvoReturn(ev, day, finalize: true);
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -5005,49 +5436,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 2),
             child: Text(
-              'Routes to: '
-              '${ev.routesTo.map((id) => _org.departments[id]?.name ?? id).join(', ')}'
-              '${ev.routedForDayMs == startOfDay(day) && ev.routedBy.isNotEmpty ? ' · routed by ${ev.routedBy}' : ''}',
+              'Depts involved: '
+              '${ev.routesTo.map((id) => _org.departments[id]?.name ?? id).join(', ')}',
               style: const TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ),
-        if (_canManageWatch)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                FilledButton.tonalIcon(
-                  onPressed: () => _autoFillBill(ev, day),
-                  icon: const Icon(Icons.auto_fix_high, size: 18),
-                  label: const Text('Auto-generate'),
-                ),
-                if (ev.routesTo.isNotEmpty)
-                  TextButton.icon(
-                    onPressed: () => _routeEvolution(ev, day),
-                    icon: const Icon(Icons.send, size: 18),
-                    label: const Text('Route'),
-                  ),
-                TextButton.icon(
-                  onPressed: () => _recordWatches(ev, day),
-                  icon: const Icon(Icons.fact_check_outlined, size: 18),
-                  label: const Text('Record'),
-                ),
-                TextButton.icon(
-                  onPressed: () => _clearBill(ev, day),
-                  icon: const Icon(Icons.clear_all, size: 18),
-                  label: const Text('Clear'),
-                ),
-                TextButton.icon(
-                  onPressed: _seedDemoCrew,
-                  icon: const Icon(Icons.group_add, size: 18),
-                  label: const Text('Demo crew'),
-                ),
-              ],
-            ),
-          ),
+        _evoStatusBar(ev, day, _store.evoRoutingFor(ev.id, day)),
         const Divider(height: 1),
         Expanded(
           child: ListView(

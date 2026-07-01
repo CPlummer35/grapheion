@@ -8,6 +8,7 @@
 // PQS line-item detail comes later — this scaffolds types + prereqs + stages.
 // All three entities sync over the mesh.
 
+import 'chain.dart' show Role, roleFromToken;
 import 'schedule.dart' show startOfDay;
 
 /// What kind of qualification a node is.
@@ -723,6 +724,72 @@ class WatchbillRouting {
     returnedBy: (j['returnedBy'] ?? '') as String,
     returnedNote: (j['returnedNote'] ?? '') as String,
     dayMs: (j['dayMs'] ?? 0) as int,
+    updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
+  );
+}
+
+/// Approval routing for an EVOLUTION watchbill — one per evolution + calendar
+/// day. Mirrors the duty-section [WatchbillRouting] two-phase lifecycle
+/// (plan → approved → finalize-with-events → recorded), but the bill climbs the
+/// command ladder [kCommandChain]: DH → XO → CO. [currentRung] is whose approval
+/// is pending while [status] is submitted (plan) or finalizing (record).
+class EvolutionRouting {
+  final String id; // '{evolutionId}|{startOfDay(dayMs)}'
+  final String evolutionId;
+  final int dayMs;
+  BillStatus status;
+  Role currentRung; // pending approver while submitted/finalizing (dh→xo→co)
+  String submittedBy; // account id of the coordinator who submitted
+  int submittedAtMs;
+  List<String> approvals; // audit trail, e.g. "DH · LT Smith"
+  String returnedBy; // account id of the rung that returned it ('' = not)
+  String returnedNote;
+  int updatedAtMs; // LWW + the timestamp shown in the status chip
+
+  EvolutionRouting({
+    required this.id,
+    required this.evolutionId,
+    required this.dayMs,
+    this.status = BillStatus.draft,
+    this.currentRung = Role.dh,
+    this.submittedBy = '',
+    this.submittedAtMs = 0,
+    List<String>? approvals,
+    this.returnedBy = '',
+    this.returnedNote = '',
+    this.updatedAtMs = 0,
+  }) : approvals = approvals ?? [];
+
+  static String makeId(String evolutionId, int dayMs) =>
+      '$evolutionId|${startOfDay(dayMs)}';
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'evolutionId': evolutionId,
+    'dayMs': dayMs,
+    'status': status.token,
+    'currentRung': currentRung.name,
+    'submittedBy': submittedBy,
+    'submittedAtMs': submittedAtMs,
+    'approvals': approvals,
+    'returnedBy': returnedBy,
+    'returnedNote': returnedNote,
+    'updatedAtMs': updatedAtMs,
+  };
+
+  factory EvolutionRouting.fromJson(Map<String, dynamic> j) => EvolutionRouting(
+    id: j['id'] as String,
+    evolutionId: (j['evolutionId'] ?? '') as String,
+    dayMs: (j['dayMs'] ?? 0) as int,
+    status: billStatusFromToken((j['status'] ?? 'draft') as String),
+    currentRung: roleFromToken((j['currentRung'] ?? 'dh') as String),
+    submittedBy: (j['submittedBy'] ?? '') as String,
+    submittedAtMs: (j['submittedAtMs'] ?? 0) as int,
+    approvals: ((j['approvals'] as List?) ?? [])
+        .map((e) => e as String)
+        .toList(),
+    returnedBy: (j['returnedBy'] ?? '') as String,
+    returnedNote: (j['returnedNote'] ?? '') as String,
     updatedAtMs: (j['updatedAtMs'] ?? 0) as int,
   );
 }

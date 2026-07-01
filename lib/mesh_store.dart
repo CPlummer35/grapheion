@@ -42,6 +42,8 @@ const kBulletin = 'bulletin'; // duty-section bulletin posts
 const kStood = 'stood'; // append-only watch-stood log
 const kEvents = 'events'; // duty-day events logged when a watchbill is recorded
 const kRouting = 'routing'; // watchbill approval chain — one per duty section
+const kEvoRouting =
+    'evorouting'; // evolution watchbill approval — one per evolution + day
 const kFeedback =
     'feedback'; // demo feedback (anyone writes, only Kratos reads)
 
@@ -83,6 +85,7 @@ class MeshStore {
   final Map<String, WatchStood> stood = {};
   final Map<String, DutyDayEvent> dutyEvents = {};
   final Map<String, WatchbillRouting> routing = {};
+  final Map<String, EvolutionRouting> evoRouting = {};
   final Map<String, FeedbackNote> feedback = {};
   final OrgChart org = OrgChart();
   final Map<String, Peer> presence = {};
@@ -238,6 +241,15 @@ class MeshStore {
           routing[docId] = r; // LWW — a stale rebroadcast can't revert status
           if (remote) _notifyForRouting(old, r, peer);
         }
+      } else if (coll == kEvoRouting) {
+        final r = EvolutionRouting.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        final old = evoRouting[docId];
+        if (old == null || r.updatedAtMs >= old.updatedAtMs) {
+          evoRouting[docId] = r; // LWW
+          if (remote) _notifyForEvoRouting(old, r, peer);
+        }
       } else if (coll == kFeedback) {
         final note = FeedbackNote.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
@@ -287,6 +299,14 @@ class MeshStore {
   WatchbillRouting routingFor(String section) =>
       routing[WatchbillRouting.makeId(section)] ??
       WatchbillRouting(id: WatchbillRouting.makeId(section), section: section);
+
+  /// The command-chain (DH→XO→CO) approval status for one evolution's watchbill
+  /// on a day — a fresh Draft routing if none exists yet.
+  EvolutionRouting evoRoutingFor(String evolutionId, int dayMs) {
+    final id = EvolutionRouting.makeId(evolutionId, dayMs);
+    return evoRouting[id] ??
+        EvolutionRouting(id: id, evolutionId: evolutionId, dayMs: dayMs);
+  }
 
   /// Duty-day events logged for one recorded day + section, type-sorted.
   /// [dayMs] is a normalized start-of-day (as stored on records).
@@ -819,6 +839,74 @@ class MeshStore {
     }
   }
 
+  /// Notify for an evolution watchbill climbing the command ladder DH→XO→CO.
+  /// The pending rung [r.currentRung] hears when it lands on them; the
+  /// coordinator who submitted hears on final approval / record / return.
+  void _notifyForEvoRouting(
+    EvolutionRouting? old,
+    EvolutionRouting r,
+    String? peer,
+  ) {
+    final me = account;
+    if (me == null) return;
+    // Only on a real transition (status, a rung advance, or a fresh return).
+    if (old != null &&
+        old.status == r.status &&
+        old.currentRung == r.currentRung &&
+        old.returnedBy == r.returnedBy) {
+      return;
+    }
+    final name = evolutions[r.evolutionId]?.name ?? 'Evolution';
+    final amSubmitter = r.submittedBy.isNotEmpty && me.id == r.submittedBy;
+    final amRung = me.role == r.currentRung; // the pending approver
+    final justReturned =
+        r.returnedBy.isNotEmpty &&
+        (old == null || old.returnedBy != r.returnedBy);
+
+    if (justReturned) {
+      if (amSubmitter) {
+        onNotify(
+          '$name watchbill returned',
+          r.returnedNote.isEmpty ? 'Returned by command' : r.returnedNote,
+          peer,
+        );
+      }
+      return;
+    }
+    switch (r.status) {
+      case BillStatus.submitted:
+        if (amRung) {
+          onNotify(
+            '$name watchbill — approval',
+            'Awaiting your ${r.currentRung.tag} approval',
+            peer,
+          );
+        }
+      case BillStatus.finalizing:
+        if (amRung) {
+          onNotify(
+            '$name record — approval',
+            'Awaiting your ${r.currentRung.tag} approval',
+            peer,
+          );
+        }
+      case BillStatus.approved:
+        if (amSubmitter) {
+          onNotify('$name watchbill approved', 'Plan certified by the CO', peer);
+        }
+      case BillStatus.finalized:
+        if (amSubmitter) {
+          onNotify(
+            '$name recorded',
+            'Certified by the CO — watches recorded',
+            peer,
+          );
+        }
+      case BillStatus.draft:
+        break;
+    }
+  }
+
   /// Clear all synced + identity state (for a device reset).
   void clear() {
     jobs.clear();
@@ -837,6 +925,7 @@ class MeshStore {
     stood.clear();
     dutyEvents.clear();
     routing.clear();
+    evoRouting.clear();
     feedback.clear();
     org.departments.clear();
     org.divisions.clear();

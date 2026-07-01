@@ -156,3 +156,17 @@ Role prevOwner(Role current) {
   if (i <= 0) return Role.technician;
   return kApprovalChain[i - 1];
 }
+
+/// Command approval ladder for EVOLUTION watchbills: a submitted bill climbs
+/// Department Head → Executive Officer → Commanding Officer, each rung
+/// approving (advancing) or returning it. Distinct from the maintenance ladder
+/// [kApprovalChain]; the CO is the final sign-off.
+const List<Role> kCommandChain = [Role.dh, Role.xo, Role.co];
+
+/// The command rung one up from [current], or null if [current] is the CO
+/// (the top — approving there certifies the bill).
+Role? nextCommand(Role current) {
+  final i = kCommandChain.indexOf(current);
+  if (i < 0 || i + 1 >= kCommandChain.length) return null;
+  return kCommandChain[i + 1];
+}
