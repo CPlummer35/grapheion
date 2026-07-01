@@ -2320,7 +2320,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final day = r.dayMs != 0
         ? r.dayMs
         : startOfDay(DateTime.now().millisecondsSinceEpoch);
-    var pickType = kDutyDayEventTypes.first;
+    String? pickType; // null until the user picks — no accidental default event
     final noteCtrl = TextEditingController();
     showModalBottomSheet(
       context: context,
@@ -2386,11 +2386,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     DropdownButton<String>(
                       value: pickType,
                       isExpanded: true,
+                      hint: const Text('Choose an event type…'),
                       items: [
                         for (final t in kDutyDayEventTypes)
                           DropdownMenuItem(value: t, child: Text(t)),
                       ],
-                      onChanged: (v) => setS(() => pickType = v ?? pickType),
+                      onChanged: (v) => setS(() => pickType = v),
                     ),
                     TextField(
                       controller: noteCtrl,
@@ -2402,17 +2403,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Add event'),
-                      onPressed: () {
-                        _addDutyEvent(
-                          day,
-                          section,
-                          pickType,
-                          noteCtrl.text.trim(),
-                        );
-                        noteCtrl.clear();
-                        setS(() {});
-                      },
+                      label: Text(
+                        pickType == null ? 'Add event' : 'Add "$pickType"',
+                      ),
+                      onPressed: pickType == null
+                          ? null
+                          : () {
+                              _addDutyEvent(
+                                day,
+                                section,
+                                pickType!,
+                                noteCtrl.text.trim(),
+                              );
+                              pickType = null;
+                              noteCtrl.clear();
+                              setS(() {});
+                            },
                     ),
                     const SizedBox(height: 16),
                     if (!forCdo)
@@ -2855,7 +2861,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }) {
     final d = startOfDay(day);
     final r = _store.evoRoutingFor(ev.id, day);
-    var pickType = kDutyDayEventTypes.first;
+    String? pickType; // null until the user picks — no accidental default event
     final noteCtrl = TextEditingController();
     showModalBottomSheet(
       context: context,
@@ -2918,14 +2924,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         ),
                       ),
                     const Divider(),
+                    Text(
+                      'Log an event that occurred',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(ctx).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
                     DropdownButton<String>(
                       value: pickType,
                       isExpanded: true,
+                      hint: const Text('Choose an event type…'),
                       items: [
                         for (final t in kDutyDayEventTypes)
                           DropdownMenuItem(value: t, child: Text(t)),
                       ],
-                      onChanged: (v) => setS(() => pickType = v ?? pickType),
+                      onChanged: (v) => setS(() => pickType = v),
                     ),
                     TextField(
                       controller: noteCtrl,
@@ -2937,12 +2953,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Add event'),
-                      onPressed: () {
-                        _addDutyEvent(d, ev.id, pickType, noteCtrl.text.trim());
-                        noteCtrl.clear();
-                        setS(() {});
-                      },
+                      label: Text(
+                        pickType == null ? 'Add event' : 'Add "$pickType"',
+                      ),
+                      // Disabled until a type is chosen — makes it obvious the
+                      // dropdown alone does not log anything.
+                      onPressed: pickType == null
+                          ? null
+                          : () {
+                              _addDutyEvent(
+                                d,
+                                ev.id,
+                                pickType!,
+                                noteCtrl.text.trim(),
+                              );
+                              pickType = null;
+                              noteCtrl.clear();
+                              setS(() {});
+                            },
                     ),
                     const SizedBox(height: 16),
                     if (!forApprover)
