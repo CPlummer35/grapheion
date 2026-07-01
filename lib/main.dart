@@ -5112,36 +5112,62 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final pid = _store.billAssignee(day, ev.id, r.id, shiftId);
     final unqual =
         pid != null && pid.isNotEmpty && !_store.isQualified(pid, r.stationId);
-    return ListTile(
-      dense: true,
-      leading: SizedBox(
-        width: 58,
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-        ),
-      ),
-      title: (pid == null || pid.isEmpty)
-          ? const Text('— unassigned', style: TextStyle(color: Colors.grey))
-          : Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    _billPersonLabel(pid),
-                    style: TextStyle(
-                      color: unqual ? _duOrange : null,
-                      fontWeight: FontWeight.w600,
-                    ),
+    final assignee = (pid == null || pid.isEmpty)
+        ? const Text('— unassigned', style: TextStyle(color: Colors.grey))
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  _billPersonLabel(pid),
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: unqual ? _duOrange : null,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(width: 6),
-                _qualMark(pid, r.stationId),
-              ],
+              ),
+              const SizedBox(width: 6),
+              _qualMark(pid, r.stationId),
+            ],
+          );
+    // Standing roles carry a full station name ("Officer of the Deck
+    // (Underway)") that won't fit the narrow section-label column, so give them
+    // the full title row; rotating shifts keep the compact "Sec N" leading.
+    final standing = shiftId.isEmpty;
+    return ListTile(
+      dense: true,
+      leading: standing
+          ? null
+          : SizedBox(
+              width: 58,
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
-      subtitle: Text(
-        sub,
-        style: const TextStyle(fontSize: 11, color: Colors.grey),
-      ),
+      title: standing
+          ? Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            )
+          : assignee,
+      subtitle: standing
+          ? Row(
+              children: [
+                Flexible(child: assignee),
+                Text(
+                  '  ·  $sub',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ],
+            )
+          : Text(sub, style: const TextStyle(fontSize: 11, color: Colors.grey)),
       trailing: edit ? const Icon(Icons.edit, size: 18) : null,
       onTap: edit
           ? () => _openBillAssign(day, ev, r, shiftId, label, scope: scope)
